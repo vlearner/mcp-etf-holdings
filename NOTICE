@@ -1,0 +1,12 @@
+This project (mcp-etf-holdings) is an independent open source tool and is not affiliated with,
+endorsed by, or supported by Yahoo Finance or yfinance.
+
+Financial data is retrieved at runtime from Yahoo Finance via the yfinance library
+(https://github.com/ranaroussi/yfinance), which is licensed under the Apache License 2.0.
+yfinance is listed as a runtime dependency and its code is not included in this repository.
+
+Yahoo Finance data is subject to Yahoo's terms of service:
+https://legal.yahoo.com/us/en/yahoo/terms/otos/index.html
+
+This tool is intended for personal, educational, and informational use only.
+It is not financial advice. Always verify data independently before making investment decisions.

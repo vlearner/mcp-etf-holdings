@@ -1,5 +1,9 @@
 # mcp-etf-holdings
 
+[![PyPI version](https://img.shields.io/pypi/v/mcp-etf-holdings)](https://pypi.org/project/mcp-etf-holdings/)
+[![Python versions](https://img.shields.io/pypi/pyversions/mcp-etf-holdings)](https://pypi.org/project/mcp-etf-holdings/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 An MCP server that lets Claude (or any MCP client) answer questions about ETF holdings — reverse lookup, top positions, and fund metadata — all sourced live from Yahoo Finance.
 
 ---
@@ -16,14 +20,29 @@ The default search universe is ~100 major ETFs covering broad market, sectors, f
 
 ---
 
+## Data Source
+
+- Data is sourced **live at runtime** from Yahoo Finance via the [yfinance](https://github.com/ranaroussi/yfinance) library.
+- **No API key required.**
+- Subject to Yahoo Finance's [terms of service](https://legal.yahoo.com/us/en/yahoo/terms/otos/index.html) and rate limits.
+- See [NOTICE](NOTICE) for full third-party attribution.
+
+---
+
 ## Installation
 
 Requires Python 3.11+.
 
+**Option 1 — uvx (no install needed, recommended for Claude Desktop users):**
+
 ```bash
-git clone https://github.com/your-org/mcp-etf-holdings.git
-cd mcp-etf-holdings
-pip install -e .
+uvx mcp-etf-holdings
+```
+
+**Option 2 — pip:**
+
+```bash
+pip install mcp-etf-holdings
 ```
 
 ---
@@ -33,8 +52,10 @@ pip install -e .
 ### Run the MCP server (stdio transport)
 
 ```bash
-python -m src.mcp_servers.etf_holdings.server
-# or after pip install -e .:
+# uvx (no prior install needed)
+uvx mcp-etf-holdings
+
+# or after pip install:
 etf-holdings-server
 ```
 
@@ -56,6 +77,33 @@ asyncio.run(main())
 
 Add to `claude_desktop_config.json` (or `~/.claude/mcp_servers.json`):
 
+**Option 1 — uvx (recommended, no install step):**
+
+```json
+{
+  "mcpServers": {
+    "etf-holdings": {
+      "command": "uvx",
+      "args": ["mcp-etf-holdings"]
+    }
+  }
+}
+```
+
+**Option 2 — pip-installed entry point:**
+
+```json
+{
+  "mcpServers": {
+    "etf-holdings": {
+      "command": "etf-holdings-server"
+    }
+  }
+}
+```
+
+**Option 3 — local dev (cloned repo):**
+
 ```json
 {
   "mcpServers": {
@@ -63,18 +111,6 @@ Add to `claude_desktop_config.json` (or `~/.claude/mcp_servers.json`):
       "command": "python",
       "args": ["-m", "src.mcp_servers.etf_holdings.server"],
       "cwd": "/absolute/path/to/mcp-etf-holdings"
-    }
-  }
-}
-```
-
-Or using the installed entry point:
-
-```json
-{
-  "mcpServers": {
-    "etf-holdings": {
-      "command": "etf-holdings-server"
     }
   }
 }
@@ -156,10 +192,16 @@ pyproject.toml
 
 ---
 
+## Disclaimer
+
+This tool is not affiliated with Yahoo Finance, yfinance, or any financial institution.
+Data is retrieved from Yahoo Finance at runtime and is subject to availability and their
+terms of service. This is not financial advice.
+
+---
+
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+PRs are welcome! The project is especially looking for contributions that expand the default ETF universe beyond the current ~100 funds — broader coverage means more accurate reverse-lookup results across niche sectors and international markets.
 
-## Changelog
-
-See [CHANGELOG.md](CHANGELOG.md)
+Please open an issue first for larger changes so we can discuss the approach.
