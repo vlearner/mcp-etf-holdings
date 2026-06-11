@@ -3,6 +3,20 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 
 
+@pytest.fixture(autouse=True)
+def clear_all_caches():
+    """Clear all module-level caches before each test to prevent cross-test contamination."""
+    from src.mcp_servers.etf_holdings.fetcher import _info_cache, _holdings_cache, _error_cache
+    _info_cache.clear()
+    _holdings_cache.clear()
+    _error_cache.clear()
+    yield
+    # Optional: clear again after test
+    _info_cache.clear()
+    _holdings_cache.clear()
+    _error_cache.clear()
+
+
 @pytest.fixture
 def mock_ticker_info():
     """Mock yfinance Ticker.info for ETF metadata."""
