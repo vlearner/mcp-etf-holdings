@@ -1,11 +1,12 @@
 """
 ETF Holdings MCP Server
 
-Exposes three tools to Claude (or any MCP client):
+Exposes four tools to Claude (or any MCP client):
 
-  get_etf_info           – metadata for an ETF (AUM, expense ratio, returns …)
-  get_etf_holdings       – top holdings of an ETF with weights
+  etf_info               – metadata for an ETF (AUM, expense ratio, returns …)
+  etf_holdings           – top holdings of an ETF with weights
   find_etfs_holding_stock – reverse lookup: which ETFs hold a given stock?
+  search_etfs            – search ETFs by name, theme, or category
 
 Run directly:
     python -m src.mcp_servers.etf_holdings.server
@@ -21,7 +22,12 @@ from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
 
-from .fetcher import find_etfs_holding_stock as _find_etfs_holding_stock, get_etf_holdings, get_etf_info
+from .fetcher import (
+    find_etfs_holding_stock as _find_etfs_holding_stock,
+    get_etf_holdings,
+    get_etf_info,
+    search_etfs as _search_etfs,
+)
 from .top_etfs import TOP_ETFS
 
 mcp = FastMCP(
@@ -56,7 +62,11 @@ async def etf_info(
     yld_str = f"{yld * 100:.2f}%" if yld else "N/A"
 
     def fmt_ret(v: float | None) -> str:
-        return f"{v * 100:.2f}%" if v else "N/A"
+        if not v:
+            return "N/A"
+        # Yahoo returns some funds' returns as fractions (0.12) and others
+        # already in percent (12.4); treat |v| > 1 as already-percent.
+        return f"{v * 100:.2f}%" if abs(v) <= 1 else f"{v:.2f}%"
 
     lines = [
         f"**{data['ticker']}** – {data['name']}",
@@ -112,7 +122,7 @@ async def find_etfs_holding_stock(
     ] = "",
 ) -> str:
     """
-    Reverse-lookup: find ETFs (from the top-~100 universe or a custom list)
+    Reverse-lookup: find ETFs (from a ~360-ETF universe or a custom list)
     that hold a given stock in their disclosed top holdings.
 
     Results are sorted by the stock's weight in each ETF, highest first.
@@ -151,6 +161,37 @@ async def find_etfs_holding_stock(
             f"  {r['etf']:<8s}  weight {r['weight_pct']:5.2f}%  "
             f"(rank #{r['rank_in_etf']} in that ETF)"
         )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Tool: search_etfs
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def search_etfs(
+    query: Annotated[str, "Search term: fund name, theme, or category, e.g. 'semiconductor' or 'dividend'"],
+    limit: Annotated[int, "Maximum number of ETFs to return (1-25, default 10)"] = 10,
+) -> str:
+    """
+    Search for ETFs by name, theme, or category using Yahoo Finance search.
+
+    Returns matching ETF tickers with their full names and exchanges.
+    Useful for discovering ETFs to pass to etf_info, etf_holdings, or
+    find_etfs_holding_stock.
+    """
+    if not query.strip():
+        return "Provide a non-empty search query, e.g. 'semiconductor' or 'emerging markets'."
+    limit = max(1, min(limit, 25))
+
+    results = await _search_etfs(query, limit=limit)
+    if not results:
+        return f"No ETFs found matching '{query}'. Try a broader or different search term."
+
+    lines = [f"ETFs matching **'{query}'** ({len(results)} result(s)):\n"]
+    for r in results:
+        lines.append(f"  {r['symbol']:<8s}  {r['name']}  [{r['exchange']}]")
     return "\n".join(lines)
 
 
