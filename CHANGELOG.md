@@ -4,11 +4,29 @@ All notable changes to this project are recorded here.
 
 ## [Unreleased]
 
-### Planned
-- Cache holdings data (TTL ~24 h) to reduce Yahoo Finance round trips
-- `search_etfs(query)` tool for name/category search
-- Expand ETF universe beyond top-100 for broader reverse-lookup coverage
-- Integration tests using `pytest-asyncio` with mocked yfinance responses
+_No unreleased changes yet._
+
+---
+
+## [0.2.0] — 2026-07-18
+
+### Added
+- `search_etfs(query)` tool — search ETFs by name, theme, or category via Yahoo Finance
+- TTL cache for holdings and info (default ~24 h) with bounded LRU eviction to cut
+  Yahoo Finance round trips
+- Negative (transient-error) caching with a short TTL to avoid retry storms on failures
+- Expanded default ETF universe to 364 funds for broader reverse-lookup coverage
+- Test suite (`pytest` + `pytest-asyncio`) with mocked yfinance responses
+- GitHub Actions workflow running the test suite on pushes and PRs to `main`
+
+### Changed
+- Security hardening: ticker/input validation, bounded concurrent fetches, de-duplicated
+  universe, structured logging, and weight normalization/clamping
+
+### Fixed
+- Concurrency semaphore is now created per event loop, fixing a
+  "bound to a different event loop" error under repeated event loops
+- `_etf_info_sync` error path now returns a consistent shape (includes `nav_price`)
 
 ---
 

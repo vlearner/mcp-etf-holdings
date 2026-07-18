@@ -46,8 +46,20 @@ def _get_cache_ttl() -> float:
 
 CACHE_TTL_SECONDS = _get_cache_ttl()
 
-# Semaphore to limit concurrent yfinance requests
-_fetch_semaphore = asyncio.Semaphore(8)
+# Semaphore to limit concurrent yfinance requests.
+# Created lazily per event loop: an asyncio.Semaphore binds to the first loop
+# that touches it, so a module-level instance breaks when the loop is replaced
+# (e.g. one loop per test). Keep one semaphore per running loop instead.
+_semaphores: "dict[asyncio.AbstractEventLoop, asyncio.Semaphore]" = {}
+
+
+def _get_fetch_semaphore() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    sem = _semaphores.get(loop)
+    if sem is None:
+        sem = asyncio.Semaphore(8)
+        _semaphores[loop] = sem
+    return sem
 
 # Regex for valid ticker format
 _TICKER_PATTERN = re.compile(r"^[A-Z0-9.\-]{1,10}$")
@@ -169,6 +181,7 @@ def _etf_info_sync(ticker: str) -> dict[str, Any]:
             "ytd_return": None,
             "three_year_return": None,
             "five_year_return": None,
+            "nav_price": None,
             "currency": "USD",
         }
 
@@ -312,7 +325,7 @@ async def get_etf_info(ticker: str) -> dict[str, Any]:
     except RuntimeError:
         loop = asyncio.get_event_loop()
 
-    async with _fetch_semaphore:
+    async with _get_fetch_semaphore():
         return await loop.run_in_executor(_executor, _etf_info_sync, ticker)
 
 
@@ -322,7 +335,7 @@ async def get_etf_holdings(ticker: str) -> list[dict[str, Any]]:
     except RuntimeError:
         loop = asyncio.get_event_loop()
 
-    async with _fetch_semaphore:
+    async with _get_fetch_semaphore():
         return await loop.run_in_executor(_executor, _etf_holdings_sync, ticker)
 
 
@@ -335,7 +348,7 @@ async def search_etfs(query: str, *, limit: int = 10) -> list[dict[str, Any]]:
     except RuntimeError:
         loop = asyncio.get_event_loop()
 
-    async with _fetch_semaphore:
+    async with _get_fetch_semaphore():
         return await loop.run_in_executor(_executor, _search_etfs_sync, query, limit)
 
 
