@@ -8,9 +8,9 @@ fetcher calls, output formatting) with yfinance mocked out.
 import pytest
 from unittest.mock import MagicMock, patch
 
-from src.mcp_servers.etf_holdings import server
-from src.mcp_servers.etf_holdings.fetcher import _info_cache, _holdings_cache
-from src.mcp_servers.etf_holdings.top_etfs import TOP_ETFS
+from mcp_etf_holdings import server
+from mcp_etf_holdings.fetcher import _info_cache, _holdings_cache
+from mcp_etf_holdings.top_etfs import TOP_ETFS
 
 
 @pytest.fixture(autouse=True)
@@ -23,13 +23,13 @@ def clear_caches():
 
 
 def _patch_ticker(mock_ticker):
-    return patch("src.mcp_servers.etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker)
+    return patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker)
 
 
 def _patch_search(quotes):
     mock_search = MagicMock()
     mock_search.quotes = quotes
-    return patch("src.mcp_servers.etf_holdings.fetcher.yf.Search", return_value=mock_search)
+    return patch("mcp_etf_holdings.fetcher.yf.Search", return_value=mock_search)
 
 
 class TestToolRegistration:
@@ -191,7 +191,7 @@ class TestSearchEtfsTool:
     @pytest.mark.asyncio
     async def test_search_exception_returns_no_results(self):
         with patch(
-            "src.mcp_servers.etf_holdings.fetcher.yf.Search",
+            "mcp_etf_holdings.fetcher.yf.Search",
             side_effect=Exception("network down"),
         ):
             out = await server.search_etfs("semiconductor")

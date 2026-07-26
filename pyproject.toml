@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-etf-holdings"
-version = "0.2.0"
+version = "0.3.0"
 description = "MCP server for ETF reverse lookup — find which ETFs hold any stock"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,8 +15,11 @@ authors = [
 ]
 keywords = ["mcp", "etf", "stocks", "finance", "yfinance", "model-context-protocol"]
 classifiers = [
+  "Development Status :: 4 - Beta",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: OS Independent",
   "Topic :: Office/Business :: Financial :: Investment",
   "Intended Audience :: Developers",
 ]
@@ -39,8 +42,10 @@ Homepage = "https://github.com/vlearner/mcp-etf-holdings"
 "Bug Tracker" = "https://github.com/vlearner/mcp-etf-holdings/issues"
 
 [project.scripts]
-etf-holdings-server = "src.mcp_servers.etf_holdings.server:main"
+# Primary name matches the distribution so bare `uvx mcp-etf-holdings` resolves.
+mcp-etf-holdings = "mcp_etf_holdings.server:main"
+# Back-compat alias for configs written against 0.2.x.
+etf-holdings-server = "mcp_etf_holdings.server:main"
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["src*"]
+where = ["src"]
