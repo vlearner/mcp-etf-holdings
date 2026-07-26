@@ -184,6 +184,110 @@ class TestEtfInfoSync:
         assert result["expense_ratio"] == 0.0003
 
 
+class TestExpenseRatioUnits:
+    """`expense_ratio` is always a fraction, whichever Yahoo field supplied it.
+
+    Regression coverage for a bug where every fund reported "N/A": the code read only
+    `annualReportExpenseRatio`/`expenseRatio`, and Yahoo had moved to `netExpenseRatio`.
+    The unit differs per field, so these must not be conflated — see
+    _EXPENSE_RATIO_FIELDS in fetcher.py.
+    """
+
+    def _info_with(self, **fields):
+        mock_ticker = MagicMock()
+        mock_ticker.info = {"shortName": "TEST", **fields}
+        return mock_ticker
+
+    def test_net_expense_ratio_is_percent_and_converted(self):
+        """netExpenseRatio 0.18 means 0.18%, i.e. 0.0018 — not 18%."""
+        _info_cache.clear()
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=self._info_with(netExpenseRatio=0.18)):
+            result = _etf_info_sync("TEST")
+        assert result["expense_ratio"] == pytest.approx(0.0018)
+
+    def test_annual_report_expense_ratio_is_already_a_fraction(self):
+        """The legacy field needs no conversion — 0.0018 is already 0.18%."""
+        _info_cache.clear()
+        with patch(
+            "mcp_etf_holdings.fetcher.yf.Ticker",
+            return_value=self._info_with(annualReportExpenseRatio=0.0018),
+        ):
+            result = _etf_info_sync("TEST")
+        assert result["expense_ratio"] == pytest.approx(0.0018)
+
+    def test_both_field_families_agree_on_the_same_fee(self):
+        """0.18 (percent field) and 0.0018 (fraction field) must not both be taken raw."""
+        _info_cache.clear()
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=self._info_with(netExpenseRatio=0.18)):
+            from_percent = _etf_info_sync("TEST")["expense_ratio"]
+        _info_cache.clear()
+        with patch(
+            "mcp_etf_holdings.fetcher.yf.Ticker",
+            return_value=self._info_with(annualReportExpenseRatio=0.0018),
+        ):
+            from_fraction = _etf_info_sync("TEST")["expense_ratio"]
+        assert from_percent == pytest.approx(from_fraction)
+
+    def test_net_is_preferred_over_gross(self):
+        """Net is what the investor actually pays after waivers."""
+        _info_cache.clear()
+        with patch(
+            "mcp_etf_holdings.fetcher.yf.Ticker",
+            return_value=self._info_with(netExpenseRatio=0.20, grossExpenseRatio=0.35),
+        ):
+            result = _etf_info_sync("TEST")
+        assert result["expense_ratio"] == pytest.approx(0.0020)
+
+    def test_percent_field_wins_over_legacy_fraction_field(self):
+        """Yahoo populates netExpenseRatio today; it leads the preference order."""
+        _info_cache.clear()
+        with patch(
+            "mcp_etf_holdings.fetcher.yf.Ticker",
+            return_value=self._info_with(netExpenseRatio=0.50, annualReportExpenseRatio=0.0018),
+        ):
+            result = _etf_info_sync("TEST")
+        assert result["expense_ratio"] == pytest.approx(0.0050)
+
+    def test_zero_expense_ratio_is_preserved_not_treated_as_missing(self):
+        """A genuine zero-fee fund must survive; `or`-chaining used to drop it."""
+        _info_cache.clear()
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=self._info_with(netExpenseRatio=0.0)):
+            result = _etf_info_sync("TEST")
+        assert result["expense_ratio"] == 0.0
+
+    def test_missing_everywhere_is_none(self):
+        _info_cache.clear()
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=self._info_with()):
+            result = _etf_info_sync("TEST")
+        assert result["expense_ratio"] is None
+
+    def test_non_numeric_value_falls_through_to_next_field(self):
+        _info_cache.clear()
+        with patch(
+            "mcp_etf_holdings.fetcher.yf.Ticker",
+            return_value=self._info_with(netExpenseRatio="n/a", annualReportExpenseRatio=0.0018),
+        ):
+            result = _etf_info_sync("TEST")
+        assert result["expense_ratio"] == pytest.approx(0.0018)
+
+    def test_real_world_values_round_trip_to_published_fees(self):
+        """Values observed live from Yahoo, against each fund's actual published fee."""
+        for ticker, net_field_value, expected_pct in [
+            ("SPY", 0.0945, 0.0945),
+            ("VOO", 0.03, 0.03),
+            ("ARKK", 0.75, 0.75),
+            ("GLD", 0.40, 0.40),
+        ]:
+            _info_cache.clear()
+            with patch(
+                "mcp_etf_holdings.fetcher.yf.Ticker",
+                return_value=self._info_with(netExpenseRatio=net_field_value),
+            ):
+                result = _etf_info_sync(ticker)
+            # server.py renders as `expense_ratio * 100`
+            assert result["expense_ratio"] * 100 == pytest.approx(expected_pct)
+
+
 class TestEtfHoldingsSync:
     """Test the _etf_holdings_sync function."""
 

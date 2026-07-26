@@ -67,6 +67,43 @@ class TestEtfInfoTool:
         assert "No data found for ticker 'NOTREAL'" in out
 
     @pytest.mark.asyncio
+    async def test_renders_net_expense_ratio_without_100x_error(self):
+        """Yahoo's netExpenseRatio 0.18 is 0.18%, so the output must not say 18.00%."""
+        mock_ticker = MagicMock()
+        mock_ticker.info = {"longName": "Invesco QQQ Trust", "netExpenseRatio": 0.18}
+        with _patch_ticker(mock_ticker):
+            out = await server.etf_info("QQQ")
+
+        assert "Expense ratio: 0.18%" in out
+        assert "18.00%" not in out
+
+    @pytest.mark.asyncio
+    async def test_expense_ratio_na_when_absent(self):
+        mock_ticker = MagicMock()
+        mock_ticker.info = {"longName": "Mystery Fund"}
+        with _patch_ticker(mock_ticker):
+            out = await server.etf_info("MYST")
+
+        assert "Expense ratio: N/A" in out
+
+    @pytest.mark.asyncio
+    async def test_zero_values_render_as_zero_not_na(self):
+        """A zero fee, zero yield, or flat year is data — not a missing value."""
+        mock_ticker = MagicMock()
+        mock_ticker.info = {
+            "longName": "Zero Fee Fund",
+            "netExpenseRatio": 0.0,
+            "yield": 0.0,
+            "ytdReturn": 0.0,
+        }
+        with _patch_ticker(mock_ticker):
+            out = await server.etf_info("ZERO")
+
+        assert "Expense ratio: 0.00%" in out
+        assert "Dividend yield: 0.00%" in out
+        assert "YTD return  : 0.00%" in out
+
+    @pytest.mark.asyncio
     async def test_millions_aum_formatting(self):
         mock_ticker = MagicMock()
         mock_ticker.info = {"longName": "Small ETF", "totalAssets": 250_000_000}

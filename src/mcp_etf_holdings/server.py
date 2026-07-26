@@ -56,13 +56,15 @@ async def etf_info(
 
     aum = data["total_assets"]
     aum_str = f"${aum / 1e9:.2f}B" if aum and aum >= 1e9 else (f"${aum / 1e6:.1f}M" if aum else "N/A")
+    # `is None` rather than a falsy check: a genuine 0.0 (a zero-fee fund, a
+    # non-distributing fund, a flat year) is real data and must not read as "N/A".
     er = data["expense_ratio"]
-    er_str = f"{er * 100:.2f}%" if er else "N/A"
+    er_str = f"{er * 100:.2f}%" if er is not None else "N/A"
     yld = data["yield"]
-    yld_str = f"{yld * 100:.2f}%" if yld else "N/A"
+    yld_str = f"{yld * 100:.2f}%" if yld is not None else "N/A"
 
     def fmt_ret(v: float | None) -> str:
-        if not v:
+        if v is None:
             return "N/A"
         # Yahoo returns some funds' returns as fractions (0.12) and others
         # already in percent (12.4); treat |v| > 1 as already-percent.
