@@ -4,7 +4,27 @@ All notable changes to this project are recorded here.
 
 ## [Unreleased]
 
-_No unreleased changes yet._
+### Changed
+- **Breaking:** the import path is now `mcp_etf_holdings`, was
+  `src.mcp_servers.etf_holdings`. The distribution previously installed a top-level
+  package literally named `src`, which would collide in site-packages; fixed before the
+  first PyPI release since import paths are public API.
+- **Breaking:** removed `src/agents/data_fetcher.py`. Nothing imported it, its docstring
+  was stale, and an MCP client covers the same ground. Import `mcp_etf_holdings.fetcher`
+  directly for programmatic access.
+- Primary console script is now `mcp-etf-holdings`, so bare `uvx mcp-etf-holdings`
+  resolves without `--from`. `etf-holdings-server` remains as an alias.
+- Consolidated to a single PyPI publish workflow using trusted publishing (OIDC); the
+  competing token-based tag workflow is gone. The build now fails if the wheel ever
+  ships a top-level `src/` again.
+
+### Added
+- `python -m mcp_etf_holdings` entry point and `__version__` on the package.
+- `.vscode/mcp.json` for VS Code, pointing at the working tree.
+- Python 3.13 to the test matrix.
+
+### Removed
+- `run_server.sh`, which hardcoded an absolute interpreter path valid on one machine.
 
 ---
 
