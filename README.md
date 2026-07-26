@@ -4,7 +4,10 @@
 
 An MCP server that lets Claude (or any MCP client) answer questions about ETF holdings — reverse lookup, top positions, and fund metadata — all sourced live from Yahoo Finance.
 
-> **Not yet on PyPI.** This project hasn't been published to PyPI, so `pip install mcp-etf-holdings` / `uvx mcp-etf-holdings` will **not** work yet. Follow the quickstart below to run it from a clone instead.
+<!-- PYPI-PENDING-BANNER: delete this block in the release commit once 0.3.0 is on PyPI -->
+> ⏳ **Pending first PyPI release.** The `uvx` / `pip install` commands below are the
+> intended install path but won't resolve until 0.3.0 is published. Until then, use
+> [From source](#from-source).
 
 ---
 
@@ -23,88 +26,115 @@ No API key needed — data comes live from Yahoo Finance via [yfinance](https://
 
 ---
 
-## Quickstart (5 minutes)
+## Install
 
-Requires **Python 3.11+**. Check your version with `python3 --version`.
+Requires **Python 3.11+**.
+
+You don't need to install anything ahead of time — every config below launches the
+server on demand. If you'd rather have it on your `PATH`:
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/vlearner/mcp-etf-holdings.git
-cd mcp-etf-holdings
-
-# 2. Create and activate a virtual environment
-python3 -m venv .venv
-source .venv/bin/activate      # Windows: .venv\Scripts\activate
-
-# 3. Install the project (installs deps + the `etf-holdings-server` command)
-pip install -e .
-
-# 4. Run it
-etf-holdings-server
+pip install mcp-etf-holdings
 ```
-
-If it's working, the process will sit there waiting silently — that's expected, it's an MCP server talking over stdio, not a normal CLI program. Press `Ctrl+C` to stop it.
-
-That confirms the server runs. To actually *use* it, wire it into Claude Desktop or Claude Code (next section) rather than running it standalone.
 
 ---
 
-## Connect it to Claude Desktop or Claude Code
+## Connect it to your editor
 
-You need the **absolute path** to your clone and the **absolute path** to the Python interpreter inside the `.venv` you just created.
+Each client below runs `uvx mcp-etf-holdings`, which downloads and launches the server
+in an isolated environment on first use. No clone, no virtualenv, no absolute paths.
 
-```bash
-# from inside the mcp-etf-holdings directory, with .venv activated
-pwd                             # → absolute path to the repo
-which python                    # → absolute path to the venv's python
+> Don't have [uv](https://docs.astral.sh/uv/)? Install it with
+> `curl -LsSf https://astral.sh/uv/install.sh | sh`, or swap `uvx mcp-etf-holdings`
+> for a plain `mcp-etf-holdings` after `pip install mcp-etf-holdings`.
+
+### VS Code
+
+Create `.vscode/mcp.json` in your workspace (or run **MCP: Open User Configuration**
+for a global one). Note VS Code uses the key `servers`:
+
+```json
+{
+  "servers": {
+    "etf-holdings": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["mcp-etf-holdings"]
+    }
+  }
+}
 ```
 
 ### Claude Desktop
 
-Open your config file:
-
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
-Add an entry under `mcpServers` (create the file/section if it doesn't exist), using the two paths from above:
+Claude Desktop and Cursor use `mcpServers` rather than `servers`:
 
 ```json
 {
   "mcpServers": {
     "etf-holdings": {
-      "command": "/absolute/path/to/mcp-etf-holdings/.venv/bin/python",
-      "args": ["-m", "src.mcp_servers.etf_holdings.server"],
-      "cwd": "/absolute/path/to/mcp-etf-holdings"
+      "command": "uvx",
+      "args": ["mcp-etf-holdings"]
     }
   }
 }
 ```
 
-Then **fully quit and reopen** Claude Desktop (not just close the window). You should see "etf-holdings" listed under the 🔌 / MCP tools icon in a new chat.
+Then **fully quit and reopen** Claude Desktop — closing the window isn't enough.
 
 ### Claude Code
 
-Same idea, in `~/.claude/mcp_servers.json`:
-
-```json
-{
-  "mcpServers": {
-    "etf-holdings": {
-      "command": "/absolute/path/to/mcp-etf-holdings/.venv/bin/python",
-      "args": ["-m", "src.mcp_servers.etf_holdings.server"],
-      "cwd": "/absolute/path/to/mcp-etf-holdings"
-    }
-  }
-}
+```bash
+claude mcp add etf-holdings -- uvx mcp-etf-holdings
 ```
 
-Restart your Claude Code session afterward.
+### Cursor
 
-> Using the venv's `python` directly (instead of the `etf-holdings-server` command) avoids relying on your shell `PATH`, which is the most common reason MCP servers "don't show up" in Claude Desktop.
+Same JSON as Claude Desktop, in `.cursor/mcp.json` (project) or `~/.cursor/mcp.json`
+(global).
 
 ### Verify it worked
 
-Ask Claude: **"Which ETFs hold NVDA?"** or **"What are QQQ's top holdings?"** — if it calls the `find_etfs_holding_stock` or `etf_holdings` tool and returns real data, you're set.
+Ask: **"Which ETFs hold NVDA?"** or **"What are QQQ's top holdings?"** If it calls
+`find_etfs_holding_stock` or `etf_holdings` and returns real data, you're set.
+
+---
+
+## From source
+
+For development, or to run without publishing:
+
+```bash
+git clone https://github.com/vlearner/mcp-etf-holdings.git
+cd mcp-etf-holdings
+uv sync                      # or: python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+```
+
+The repo ships a `.vscode/mcp.json` that points at your working tree, so VS Code picks
+up local changes with no extra setup. For other clients, point them at:
+
+```json
+{
+  "command": "uv",
+  "args": ["run", "--directory", "/absolute/path/to/mcp-etf-holdings", "mcp-etf-holdings"]
+}
+```
+
+Run the server standalone to check it starts — it will sit silent, waiting for JSON-RPC
+on stdin, which is correct for a stdio MCP server:
+
+```bash
+uv run mcp-etf-holdings
+```
+
+To exercise the protocol interactively:
+
+```bash
+npx @modelcontextprotocol/inspector uv run mcp-etf-holdings
+```
 
 ---
 
@@ -112,30 +142,11 @@ Ask Claude: **"Which ETFs hold NVDA?"** or **"What are QQQ's top holdings?"** �
 
 | Symptom | Likely cause / fix |
 |---|---|
-| `pip install mcp-etf-holdings` fails / not found | It's not on PyPI yet — clone the repo and use `pip install -e .` instead (see Quickstart). |
-| Server tool not showing up in Claude Desktop | Use the venv's full `python` path in the config (not just `python` or `etf-holdings-server`), and make sure `cwd` is the absolute repo path. Fully restart Claude Desktop after editing the config. |
-| `ModuleNotFoundError` when running | You likely activated the wrong environment, or skipped `pip install -e .`. Re-run the Quickstart steps in order. |
-| `command not found: etf-holdings-server` | Your venv isn't activated. Run `source .venv/bin/activate` first, or use the full path `/path/to/.venv/bin/etf-holdings-server`. |
-| Tool calls return "No data found" | Double-check the ticker is a real ETF/stock symbol. Yahoo Finance occasionally rate-limits — wait a bit and retry. |
-| Python version error during install | You need Python 3.11+. Check with `python3 --version`; install a newer one from [python.org](https://www.python.org/downloads/) if needed. |
-
----
-
-## Use from a script or agent (without Claude Desktop)
-
-```python
-import asyncio
-from src.agents.data_fetcher import fetch_etf_info, fetch_etf_holdings, fetch_etfs_holding_stock
-
-async def main():
-    print(await fetch_etf_info("QQQ"))
-    print(await fetch_etf_holdings("SPY"))
-    print(await fetch_etfs_holding_stock("AAPL", limit=10))
-
-asyncio.run(main())
-```
-
-Run with `python your_script.py` from the repo root (with the venv activated).
+| `command not found: uvx` | Install uv: `curl -LsSf https://astral.sh/uv/install.sh \| sh`, then restart your editor so it picks up the new `PATH`. |
+| Server doesn't appear in the client | Editors only read MCP config at startup — fully restart (quit, don't just close the window). Check the client's MCP logs for the launch error. |
+| Works in a terminal but not in the editor | GUI apps often don't inherit your shell `PATH`. Use an absolute path to `uvx` (`which uvx`) in the config. |
+| Tool calls return "No data found" | Verify the ticker is a real ETF/stock symbol. Yahoo Finance rate-limits occasionally — wait and retry. |
+| Python version error during install | Needs Python 3.11+. Check with `python3 --version`. |
 
 ---
 
@@ -197,23 +208,20 @@ Search for ETFs by name, theme, or category using Yahoo Finance search.
 ## Project layout
 
 ```
-src/
-  mcp_servers/
-    etf_holdings/
-      server.py      ← FastMCP server entry point (4 tools)
-      fetcher.py     ← Async wrappers around yfinance (sync) calls + 24h TTL cache
-      top_etfs.py    ← ~360 ETF tickers used for reverse-lookup scans
-  agents/
-    data_fetcher.py  ← MCP client that spawns the server over stdio
-tests/                ← pytest suite, fully offline (yfinance is mocked)
+src/mcp_etf_holdings/
+  server.py       ← FastMCP server entry point (4 tools)
+  fetcher.py      ← Async wrappers around yfinance (sync) calls + 24h TTL cache
+  top_etfs.py     ← ~360 ETF tickers used for reverse-lookup scans
+  __main__.py     ← enables `python -m mcp_etf_holdings`
+tests/            ← pytest suite, fully offline (yfinance is mocked)
+.vscode/mcp.json  ← VS Code MCP config pointing at the working tree
 pyproject.toml
 ```
 
 Run the tests with:
 
 ```bash
-pip install -e ".[dev]"
-pytest tests/
+uv run pytest -q     # or: pip install -e ".[dev]" && pytest -q
 ```
 
 ---

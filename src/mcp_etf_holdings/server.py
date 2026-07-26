@@ -9,10 +9,10 @@ Exposes four tools to Claude (or any MCP client):
   search_etfs            – search ETFs by name, theme, or category
 
 Run directly:
-    python -m src.mcp_servers.etf_holdings.server
+    python -m mcp_etf_holdings
 
 Or via the installed script:
-    etf-holdings-server
+    mcp-etf-holdings
 """
 
 from __future__ import annotations

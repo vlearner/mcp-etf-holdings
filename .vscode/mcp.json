@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "etf-holdings": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--directory", "${workspaceFolder}", "mcp-etf-holdings"]
+    }
+  }
+}

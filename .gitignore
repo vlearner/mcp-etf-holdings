@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# uv lockfile — this is a published library, not an app; deps resolve from pyproject
+uv.lock
