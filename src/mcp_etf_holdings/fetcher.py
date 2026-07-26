@@ -122,6 +122,43 @@ _error_cache = _TTLCache(60.0, max_size=1000)  # 60 second negative cache
 # ---------------------------------------------------------------------------
 
 
+# Expense-ratio fields Yahoo may return, in preference order, tagged with the unit
+# each one uses. Net comes before gross because net is what an investor actually pays
+# after fee waivers.
+#
+# The unit MUST come from the field name, never from the value's magnitude. Unlike
+# trailing returns (see fmt_ret in server.py), an expense ratio of 0.03 is genuinely
+# ambiguous — it is 0.03% as netExpenseRatio but 3% as annualReportExpenseRatio, and
+# both are plausible fees. Guessing here silently misreports costs by 100x.
+_EXPENSE_RATIO_FIELDS: tuple[tuple[str, bool], ...] = (
+    ("netExpenseRatio", True),           # percent, e.g. 0.0945 -> 0.0945%
+    ("grossExpenseRatio", True),         # percent
+    ("annualReportExpenseRatio", False),  # already a fraction, e.g. 0.000945
+    ("expenseRatio", False),             # already a fraction
+)
+
+
+def _expense_ratio_fraction(info: dict[str, Any]) -> float | None:
+    """Return the expense ratio as a fraction (0.000945 == 0.0945%), or None.
+
+    As of yfinance 1.5.x only `netExpenseRatio` is populated for ETFs; the others are
+    kept as fallbacks for older payloads and mutual funds.
+    """
+    for field, is_percent in _EXPENSE_RATIO_FIELDS:
+        value = info.get(field)
+        if value is None:
+            continue
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            logger.debug("Non-numeric %s: %r", field, value)
+            continue
+        if value < 0:
+            continue
+        return value / 100.0 if is_percent else value
+    return None
+
+
 def _etf_info_sync(ticker: str) -> dict[str, Any]:
     if not _is_valid_ticker(ticker):
         logger.warning("Invalid ticker format: %s", ticker)
@@ -157,7 +194,7 @@ def _etf_info_sync(ticker: str) -> dict[str, Any]:
             "name": info.get("longName") or info.get("shortName", ""),
             "category": info.get("category", ""),
             "total_assets": info.get("totalAssets"),
-            "expense_ratio": info.get("annualReportExpenseRatio") or info.get("expenseRatio"),
+            "expense_ratio": _expense_ratio_fraction(info),
             "yield": info.get("yield"),
             "ytd_return": info.get("ytdReturn"),
             "three_year_return": info.get("threeYearAverageReturn"),

@@ -4,6 +4,16 @@ All notable changes to this project are recorded here.
 
 ## [Unreleased]
 
+### Fixed
+- `etf_info` reported `Expense ratio: N/A` for every fund. Yahoo moved the value to
+  `netExpenseRatio`; the code only read `annualReportExpenseRatio`/`expenseRatio`, which
+  are now `None` for all ETFs checked. The two field families use different units
+  (`netExpenseRatio` is a percent, the legacy fields are fractions), so the conversion is
+  driven by which field supplied the value — never by its magnitude, since `0.03` is
+  genuinely ambiguous between 0.03% and 3%.
+- A genuine `0.0` expense ratio, dividend yield, or trailing return rendered as `N/A`
+  because of falsy checks. Zero-fee funds now display `0.00%`.
+
 ### Changed
 - **Breaking:** the import path is now `mcp_etf_holdings`, was
   `src.mcp_servers.etf_holdings`. The distribution previously installed a top-level
