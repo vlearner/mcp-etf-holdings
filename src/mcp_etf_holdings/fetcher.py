@@ -331,11 +331,6 @@ def _search_symbols_sync(
     return results
 
 
-def _search_etfs_sync(query: str, limit: int) -> list[dict[str, Any]]:
-    """ETF-only search — the original behaviour, now a thin filter."""
-    return _search_symbols_sync(query, limit, quote_types=("ETF",))
-
-
 def _find_etfs_holding_stock_sync(
     stock_ticker: str, etf_universe: list[str], limit: int
 ) -> list[dict[str, Any]]:

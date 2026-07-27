@@ -361,6 +361,13 @@ Run the tests with:
 uv run pytest -q     # or: pip install -e ".[dev]" && pytest -q
 ```
 
+The suite is fully offline — both `yf.Ticker` and `yf.Search` are mocked, the latter by
+an autouse fixture so no test can reach Yahoo even by accident. For coverage:
+
+```bash
+uv run pytest -q --cov=mcp_etf_holdings --cov-report=term-missing
+```
+
 ---
 
 ## Dependencies

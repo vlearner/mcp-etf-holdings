@@ -32,6 +32,8 @@ All notable changes to this project are recorded here.
   now use `Field(description=...)`, with a test asserting no parameter is left undescribed.
 - `etf_info`'s label column was misaligned: `Expense ratio:` and `Dividend yield:` were
   not padded to the width used by the other rows.
+- A newline inside a table cell ended the row early and left the remainder as a stray
+  line, garbling the table. Cell values now have their internal whitespace collapsed.
 - `etf_info` reported `Expense ratio: N/A` for every fund. Yahoo moved the value to
   `netExpenseRatio`; the code only read `annualReportExpenseRatio`/`expenseRatio`, which
   are now `None` for all ETFs checked. The two field families use different units
@@ -50,6 +52,11 @@ All notable changes to this project are recorded here.
   `markdown_table` escapes pipes in values — fund names contain them.
 - The ETF universe was documented as "~300" in `top_etfs.py` and "~360" in the README
   while actually holding 364 tickers; all three now say ~365.
+- Test suite expanded from 73 to 185 tests (96% line coverage), adding units for the
+  cache-TTL environment validation, negative/error caching, holdings weight
+  normalization, every prompt body, and the name-resolution fallback. `pytest-cov` is
+  now a dev dependency.
+
 - **Breaking:** the import path is now `mcp_etf_holdings`, was
   `src.mcp_servers.etf_holdings`. The distribution previously installed a top-level
   package literally named `src`, which would collide in site-packages; fixed before the
@@ -64,6 +71,8 @@ All notable changes to this project are recorded here.
   ships a top-level `src/` again.
 
 ### Removed
+- `_search_etfs_sync`, which became unreachable once `search_etfs` began delegating to
+  `search_symbols`.
 - `run_server.sh`, which hardcoded an absolute interpreter path valid on one machine.
 
 ---

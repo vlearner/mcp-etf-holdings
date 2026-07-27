@@ -53,12 +53,18 @@ def fmt_weight(value: float | None) -> str:
 
 
 def _cell(value: object) -> str:
-    """Render one cell: stringify, escape pipes, collapse blanks to EMPTY."""
-    text = "" if value is None else str(value).strip()
+    """Render one cell: stringify, neutralize table-breaking characters.
+
+    Blank values collapse to EMPTY. Two characters would otherwise corrupt the
+    table: a pipe splits the row into extra columns, and a newline ends the row
+    mid-way and turns the remainder into a stray line. Neither is expected in
+    Yahoo's data, but one occurrence would garble the whole table.
+    """
+    if value is None:
+        return EMPTY
+    text = " ".join(str(value).split())
     if not text:
         return EMPTY
-    # An unescaped pipe inside a fund name would split the row into extra
-    # columns and corrupt every cell after it.
     return text.replace("|", "\\|")
 
 
