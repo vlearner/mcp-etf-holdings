@@ -291,8 +291,8 @@ async def find_etfs_holding_stock(
         str,
         Field(
             description=(
-                "Stock ticker to search for, e.g. 'AAPL' or 'NVDA'. A company "
-                "name ('Nvidia') also works and will be resolved to a ticker."
+                "Stock ticker or company name to search for, "
+                "e.g. 'NVDA' or 'Nvidia'"
             )
         ),
     ],

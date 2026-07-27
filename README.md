@@ -23,12 +23,9 @@ An MCP server that lets Claude (or any MCP client) answer questions about ETF ho
 | "Find me semiconductor ETFs" | `search_etfs` |
 | "What's the ticker for Berkshire Hathaway?" | `lookup_symbol` |
 
-Two things worth knowing up front:
-
-- **You don't need to know ticker symbols.** Company and fund names work — "Which ETFs
-  hold Nvidia?" resolves to `NVDA` and tells you it did so.
-- **Ask about several funds at once.** Multi-fund questions come back as a single
-  comparison table rather than a stack of separate readouts.
+Search by company name or ticker symbol — "Which ETFs hold Nvidia?" works the same as
+"Which ETFs hold NVDA?". Ask about several funds at once and you get one comparison table
+back.
 
 The reverse-lookup tools scan a universe of ~365 major ETFs (broad market, sectors, factors, international, fixed income, commodities).
 
@@ -36,14 +33,11 @@ No API key needed — data comes live from Yahoo Finance via [yfinance](https://
 
 ---
 
-## Use cases & prompt cookbook
+## Example prompts
 
-Copy any of these into a client with the server connected.
+Copy any of these into a client that has the server connected.
 
 ### Compare funds side by side
-
-The most common ETF question is "which of these should I hold?" Give it as many tickers
-as you like and the answer arrives as one table, not four separate blocks.
 
 > Compare SPY, VOO, IVV and SPLG — they all track the S&P 500, so which is cheapest?
 
@@ -51,7 +45,7 @@ as you like and the answer arrives as one table, not four separate blocks.
 
 > Which of VTI, ITOT and SCHB has the lowest fee?
 
-### Look things up without knowing the ticker
+### Search by company name or ticker
 
 > Which ETFs hold Nvidia?
 
@@ -183,8 +177,7 @@ Same JSON as Claude Desktop, in `.cursor/mcp.json` (project) or `~/.cursor/mcp.j
 
 Ask: **"Which ETFs hold NVDA?"** or **"Compare SPY, QQQ and VTI"**. If it calls
 `find_etfs_holding_stock` or `compare_etfs` and returns real data, you're set. Then try
-**"Which ETFs hold Nvidia?"** — the name, not the ticker — to confirm symbol resolution
-works too.
+**"Which ETFs hold Nvidia?"** by name, to check that symbol lookup works too.
 
 ---
 
@@ -237,7 +230,7 @@ npx @modelcontextprotocol/inspector uv run mcp-etf-holdings
 
 ## MCP tools reference
 
-Tools that return more than one row return a markdown table.
+Tools that return more than one row format the result as a markdown table.
 
 ### `etf_info(ticker)`
 
@@ -284,9 +277,8 @@ Reverse lookup: find which ETFs hold a given stock in their disclosed top positi
 
 **Parameters**
 
-- `stock_ticker` (string) — stock to search for, e.g. `"NVDA"`. A company name
-  (`"Nvidia"`) also works: if the input finds nothing, it is resolved to a ticker and the
-  output says which one it used.
+- `stock_ticker` (string) — stock to search for: a ticker like `"NVDA"` or a company name
+  like `"Nvidia"`. Names are resolved to a ticker, and the output says which one it used.
 - `limit` (int, default 20) — max results, capped at 50
 - `custom_etf_universe` (JSON string, optional) — restrict search to a specific list, e.g. `'["SPY","QQQ","XLK"]'`
 
