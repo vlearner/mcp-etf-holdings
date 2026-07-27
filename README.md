@@ -16,13 +16,96 @@ An MCP server that lets Claude (or any MCP client) answer questions about ETF ho
 | Ask Claude... | Tool it calls |
 |----------------|----------------|
 | "Which ETFs hold NVDA?" | `find_etfs_holding_stock` |
+| "What's the cheapest ETF for Nvidia exposure?" | `stock_exposure_summary` |
+| "Compare SPY, VOO, QQQ and SCHD" | `compare_etfs` |
 | "What are SPY's top holdings?" | `etf_holdings` |
 | "What is QQQ's expense ratio and AUM?" | `etf_info` |
 | "Find me semiconductor ETFs" | `search_etfs` |
+| "What's the ticker for Berkshire Hathaway?" | `lookup_symbol` |
 
-The reverse-lookup tool scans a universe of ~360 major ETFs (broad market, sectors, factors, international, fixed income, commodities).
+Two things worth knowing up front:
+
+- **You don't need to know ticker symbols.** Company and fund names work — "Which ETFs
+  hold Nvidia?" resolves to `NVDA` and tells you it did so.
+- **Ask about several funds at once.** Multi-fund questions come back as a single
+  comparison table rather than a stack of separate readouts.
+
+The reverse-lookup tools scan a universe of ~365 major ETFs (broad market, sectors, factors, international, fixed income, commodities).
 
 No API key needed — data comes live from Yahoo Finance via [yfinance](https://github.com/ranaroussi/yfinance).
+
+---
+
+## Use cases & prompt cookbook
+
+Copy any of these into a client with the server connected.
+
+### Compare funds side by side
+
+The most common ETF question is "which of these should I hold?" Give it as many tickers
+as you like and the answer arrives as one table, not four separate blocks.
+
+> Compare SPY, VOO, IVV and SPLG — they all track the S&P 500, so which is cheapest?
+
+> Compare QQQ, VGT, XLK and SMH on expense ratio and 5-year return.
+
+> Which of VTI, ITOT and SCHB has the lowest fee?
+
+### Look things up without knowing the ticker
+
+> Which ETFs hold Nvidia?
+
+> What's the ticker for Berkshire Hathaway?
+
+> Find me the Vanguard total stock market fund and show its top holdings.
+
+### Find the cheapest or largest exposure to a stock
+
+> What's the cheapest ETF to get exposure to Nvidia?
+
+> I want AMD exposure without buying the stock directly — what are my options, and what
+> do they cost?
+
+> Which ETF gives me the most concentrated Tesla exposure?
+
+### Check a portfolio for overlap
+
+> I own VOO, QQQ and VGT. Am I doubling up?
+
+> Show me every holding that appears in more than one of SPY, SCHD and DGRO.
+
+### Discover funds by theme
+
+> Find semiconductor ETFs and compare the three biggest.
+
+> What dividend ETFs exist, and which has the highest yield?
+
+> Show me clean energy ETFs, then tell me what the top one actually holds.
+
+### Research a single fund
+
+> Give me a deep dive on SCHD.
+
+> How concentrated is QQQ? What share of it is the top 5 positions?
+
+> What does ARKK hold right now?
+
+### Prompt templates (slash-commands)
+
+The server also registers five prompt templates. In Claude Desktop and Claude Code they
+show up as slash-commands, so you don't have to write the prompt yourself:
+
+| Template | Argument | What it does |
+|---|---|---|
+| `etf_deep_dive` | `ticker` | Costs, size, returns, and a concentration read on one fund |
+| `compare_funds` | `tickers` | Side-by-side table plus a cost/return interpretation |
+| `stock_exposure` | `stock` | Ranks the ETFs that hold a stock by weight and cost |
+| `portfolio_checkup` | `tickers` | Finds positions duplicated across the funds you hold |
+| `theme_explorer` | `theme` | Discovers funds for a theme and compares the leaders |
+
+> **Not financial advice.** Every tool reports what Yahoo Finance publishes. See
+> [Data source & limitations](#data-source--limitations) for what the numbers do and
+> don't cover.
 
 ---
 
@@ -98,8 +181,10 @@ Same JSON as Claude Desktop, in `.cursor/mcp.json` (project) or `~/.cursor/mcp.j
 
 ### Verify it worked
 
-Ask: **"Which ETFs hold NVDA?"** or **"What are QQQ's top holdings?"** If it calls
-`find_etfs_holding_stock` or `etf_holdings` and returns real data, you're set.
+Ask: **"Which ETFs hold NVDA?"** or **"Compare SPY, QQQ and VTI"**. If it calls
+`find_etfs_holding_stock` or `compare_etfs` and returns real data, you're set. Then try
+**"Which ETFs hold Nvidia?"** — the name, not the ticker — to confirm symbol resolution
+works too.
 
 ---
 
@@ -152,15 +237,32 @@ npx @modelcontextprotocol/inspector uv run mcp-etf-holdings
 
 ## MCP tools reference
 
+Tools that return more than one row return a markdown table.
+
 ### `etf_info(ticker)`
 
-Returns fund metadata for a given ETF ticker.
+Returns fund metadata for a single ETF ticker. For two or more funds use `compare_etfs`.
 
 **Parameters**
 
 - `ticker` (string) — ETF symbol, e.g. `"SPY"`
 
 **Returns** — name, category, AUM, expense ratio, dividend yield, NAV/price, YTD / 3-yr / 5-yr returns.
+
+---
+
+### `compare_etfs(tickers)`
+
+Compares several ETFs in a single table.
+
+**Parameters**
+
+- `tickers` (array of strings) — e.g. `["SPY", "QQQ", "VTI", "SCHD"]`. Case-insensitive
+  and de-duplicated; capped at 10 funds per call.
+
+**Returns** — one table with Ticker, Name, Category, AUM, Expense, Yield, YTD, 3-Yr, 5-Yr.
+Tickers that return no data still get a row, plus a note naming them — one typo doesn't
+discard the rest of the comparison.
 
 ---
 
@@ -182,13 +284,44 @@ Reverse lookup: find which ETFs hold a given stock in their disclosed top positi
 
 **Parameters**
 
-- `stock_ticker` (string) — stock to search for, e.g. `"NVDA"`
+- `stock_ticker` (string) — stock to search for, e.g. `"NVDA"`. A company name
+  (`"Nvidia"`) also works: if the input finds nothing, it is resolved to a ticker and the
+  output says which one it used.
 - `limit` (int, default 20) — max results, capped at 50
 - `custom_etf_universe` (JSON string, optional) — restrict search to a specific list, e.g. `'["SPY","QQQ","XLK"]'`
 
-**Returns** — list of matching ETFs sorted by the stock's weight, highest first.
+**Returns** — table of matching ETFs sorted by the stock's weight, highest first.
 
 > Note: only top holdings (~10–15 positions per ETF) are checked. A stock held outside the top positions will not appear in results.
+
+---
+
+### `stock_exposure_summary(stock, limit)`
+
+Same reverse lookup as above, joined with each fund's cost and size — the tool to reach for
+when the question is "what's the cheapest / largest way to hold this?".
+
+**Parameters**
+
+- `stock` (string) — ticker or company name, e.g. `"NVDA"` or `"Nvidia"`
+- `limit` (int, default 10) — max results, capped at 25
+
+**Returns** — table with ETF, Name, Weight, Rank, Expense, AUM, sorted by weight in the stock.
+
+---
+
+### `lookup_symbol(query, limit, asset_type)`
+
+Resolves a company or fund name to its ticker symbol. Use it whenever you know the name but
+not the symbol.
+
+**Parameters**
+
+- `query` (string) — e.g. `"Nvidia"` or `"Vanguard total stock market"`
+- `limit` (int, default 10) — max results, capped at 25
+- `asset_type` (string, default `"any"`) — `"any"`, `"stock"`, or `"etf"`
+
+**Returns** — table with Symbol, Name, Type, Exchange.
 
 ---
 
@@ -201,7 +334,9 @@ Search for ETFs by name, theme, or category using Yahoo Finance search.
 - `query` (string) — search term, e.g. `"semiconductor"` or `"dividend"`
 - `limit` (int, default 10) — max results, capped at 25
 
-**Returns** — matching ETF tickers with full names and exchanges. Useful for discovering tickers to feed into the other tools.
+**Returns** — table of matching ETF tickers with full names and exchanges. Useful for
+discovering tickers to feed into `compare_etfs` or the other tools. To resolve a *stock*
+name rather than find funds, use `lookup_symbol`.
 
 ---
 
@@ -209,9 +344,11 @@ Search for ETFs by name, theme, or category using Yahoo Finance search.
 
 ```
 src/mcp_etf_holdings/
-  server.py       ← FastMCP server entry point (4 tools)
+  server.py       ← FastMCP server entry point (7 tools)
+  prompts.py      ← Prompt templates exposed as client slash-commands
   fetcher.py      ← Async wrappers around yfinance (sync) calls + 24h TTL cache
-  top_etfs.py     ← ~360 ETF tickers used for reverse-lookup scans
+  formatting.py   ← Markdown tables and shared number formatting
+  top_etfs.py     ← ~365 ETF tickers used for reverse-lookup scans
   __main__.py     ← enables `python -m mcp_etf_holdings`
 tests/            ← pytest suite, fully offline (yfinance is mocked)
 .vscode/mcp.json  ← VS Code MCP config pointing at the working tree
@@ -240,8 +377,8 @@ uv run pytest -q     # or: pip install -e ".[dev]" && pytest -q
 ## Data source & limitations
 
 - Data is sourced **live at runtime** from Yahoo Finance via `yfinance` — no API key required, but subject to Yahoo's [terms of service](https://legal.yahoo.com/us/en/yahoo/terms/otos/index.html) and rate limits. See [NOTICE](NOTICE) for full attribution.
-- Only top holdings (~10–15 positions) are exposed per ETF; full portfolio data isn't available via this API.
-- The default ETF universe covers ~360 funds. Stocks held only in niche or very small ETFs may not be found.
+- Only top holdings (~10–15 positions) are exposed per ETF; full portfolio data isn't available via this API. Anything derived from holdings — reverse lookups, exposure summaries, overlap checks — is therefore a floor, not a complete picture.
+- The default ETF universe covers ~365 funds. Stocks held only in niche or very small ETFs may not be found.
 - Holdings/info responses are cached in-memory for 24h (`ETF_CACHE_TTL_SECONDS` env var overrides).
 
 ---

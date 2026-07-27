@@ -1,4 +1,4 @@
-# ~300 major US-listed ETFs used for reverse-lookup scans.
+# ~365 major US-listed ETFs used for reverse-lookup scans.
 # Curated by AUM and category coverage; source: industry rankings as of early 2025.
 # Non-equity funds (bonds, commodities) return empty holdings and are cached
 # as such, so they add negligible cost to repeat scans.

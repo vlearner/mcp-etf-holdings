@@ -4,7 +4,34 @@ All notable changes to this project are recorded here.
 
 ## [Unreleased]
 
+### Added
+- `compare_etfs(tickers)` — compares any number of ETFs (up to 10) in a single table
+  instead of requiring one `etf_info` call per fund. Takes a real array parameter, so
+  clients pass `["SPY","QQQ","VTI"]` rather than a JSON string.
+- `lookup_symbol(query, limit, asset_type)` — resolves a company or fund name to its
+  ticker. Yahoo's search already returned equities; the ETF-only filter had been
+  discarding them, so there was no way to go from "Nvidia" to `NVDA`.
+- `stock_exposure_summary(stock, limit)` — the reverse lookup joined with each fund's
+  expense ratio and AUM, for "what is the cheapest way to hold this stock?".
+- Company names are now accepted wherever a stock ticker is. `find_etfs_holding_stock`
+  and `stock_exposure_summary` resolve a name when the direct lookup returns nothing, and
+  disclose the substitution (`> Interpreted "Nvidia" as **NVDA**`) rather than guessing
+  silently. The ticker pattern accepts `NVIDIA` as well-formed, so this previously failed
+  as an empty result with no explanation.
+- Five prompt templates (`etf_deep_dive`, `compare_funds`, `stock_exposure`,
+  `portfolio_checkup`, `theme_explorer`), surfaced as slash-commands by MCP clients.
+- README "Use cases & prompt cookbook" section with copy-paste prompts by intent.
+- `python -m mcp_etf_holdings` entry point and `__version__` on the package.
+- `.vscode/mcp.json` for VS Code, pointing at the working tree.
+- Python 3.13 to the test matrix.
+
 ### Fixed
+- Tool parameter descriptions never reached the JSON schema. They were written as
+  `Annotated[str, "..."]`, and pydantic ignores bare strings in `Annotated` — so every
+  parameter on all four original tools was exposed to clients with no description. They
+  now use `Field(description=...)`, with a test asserting no parameter is left undescribed.
+- `etf_info`'s label column was misaligned: `Expense ratio:` and `Dividend yield:` were
+  not padded to the width used by the other rows.
 - `etf_info` reported `Expense ratio: N/A` for every fund. Yahoo moved the value to
   `netExpenseRatio`; the code only read `annualReportExpenseRatio`/`expenseRatio`, which
   are now `None` for all ETFs checked. The two field families use different units
@@ -15,6 +42,14 @@ All notable changes to this project are recorded here.
   because of falsy checks. Zero-fee funds now display `0.00%`.
 
 ### Changed
+- Tools returning more than one row now emit markdown tables rather than fixed-width
+  text lists: `etf_holdings`, `find_etfs_holding_stock`, `search_etfs`, and all new tools.
+  `etf_info` keeps its label/value block, since a one-row table reads worse.
+- Shared display formatting moved to a new `formatting.py` (`fmt_aum`, `fmt_pct`,
+  `fmt_return`, `fmt_weight`, `markdown_table`); it had been duplicated across tools.
+  `markdown_table` escapes pipes in values — fund names contain them.
+- The ETF universe was documented as "~300" in `top_etfs.py` and "~360" in the README
+  while actually holding 364 tickers; all three now say ~365.
 - **Breaking:** the import path is now `mcp_etf_holdings`, was
   `src.mcp_servers.etf_holdings`. The distribution previously installed a top-level
   package literally named `src`, which would collide in site-packages; fixed before the
@@ -27,11 +62,6 @@ All notable changes to this project are recorded here.
 - Consolidated to a single PyPI publish workflow using trusted publishing (OIDC); the
   competing token-based tag workflow is gone. The build now fails if the wheel ever
   ships a top-level `src/` again.
-
-### Added
-- `python -m mcp_etf_holdings` entry point and `__version__` on the package.
-- `.vscode/mcp.json` for VS Code, pointing at the working tree.
-- Python 3.13 to the test matrix.
 
 ### Removed
 - `run_server.sh`, which hardcoded an absolute interpreter path valid on one machine.

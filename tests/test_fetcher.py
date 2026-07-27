@@ -13,6 +13,9 @@ from mcp_etf_holdings.fetcher import (
     get_etf_holdings,
     find_etfs_holding_stock,
     search_etfs,
+    _search_symbols_sync,
+    resolve_stock_symbol,
+    get_etf_infos,
     _info_cache,
     _holdings_cache,
     _is_valid_ticker,
@@ -593,3 +596,114 @@ class TestInputValidation:
     async def test_search_etfs_invalid_query(self):
         with pytest.raises(ValueError, match="non-empty string"):
             await search_etfs("", limit=10)
+
+
+class TestSearchSymbols:
+    """The generalized search, which search_etfs now delegates to."""
+
+    QUOTES = [
+        {"quoteType": "EQUITY", "symbol": "NVDA", "longname": "NVIDIA Corporation", "exchDisp": "NASDAQ"},
+        {"quoteType": "ETF", "symbol": "SMH", "longname": "VanEck Semiconductor ETF", "exchange": "NMS"},
+        {"quoteType": "FUTURE", "symbol": "NQ=F", "shortname": "Nasdaq 100 Futures"},
+    ]
+
+    def _patch(self, quotes):
+        mock_search = MagicMock()
+        mock_search.quotes = quotes
+        return patch("mcp_etf_holdings.fetcher.yf.Search", return_value=mock_search)
+
+    def test_no_filter_returns_every_quote_type(self):
+        with self._patch(self.QUOTES):
+            results = _search_symbols_sync("nvidia", 10)
+
+        assert [r["symbol"] for r in results] == ["NVDA", "SMH", "NQ=F"]
+        assert results[0]["type"] == "EQUITY"
+
+    def test_filter_is_applied(self):
+        with self._patch(self.QUOTES):
+            results = _search_symbols_sync("nvidia", 10, quote_types=("EQUITY",))
+
+        assert [r["symbol"] for r in results] == ["NVDA"]
+
+    def test_filter_is_case_insensitive(self):
+        with self._patch(self.QUOTES):
+            results = _search_symbols_sync("nvidia", 10, quote_types=("etf",))
+
+        assert [r["symbol"] for r in results] == ["SMH"]
+
+    def test_limit_truncates(self):
+        with self._patch(self.QUOTES):
+            results = _search_symbols_sync("nvidia", 2)
+
+        assert len(results) == 2
+
+    def test_search_failure_returns_empty(self):
+        with patch(
+            "mcp_etf_holdings.fetcher.yf.Search", side_effect=Exception("network down")
+        ):
+            assert _search_symbols_sync("nvidia", 10) == []
+
+    @pytest.mark.asyncio
+    async def test_search_etfs_still_filters_to_etfs(self):
+        with self._patch(self.QUOTES):
+            results = await search_etfs("nvidia", limit=10)
+
+        assert [r["symbol"] for r in results] == ["SMH"]
+
+
+class TestResolveStockSymbol:
+    def _patch(self, quotes):
+        mock_search = MagicMock()
+        mock_search.quotes = quotes
+        return patch("mcp_etf_holdings.fetcher.yf.Search", return_value=mock_search)
+
+    @pytest.mark.asyncio
+    async def test_returns_best_match(self):
+        quotes = [
+            {"quoteType": "EQUITY", "symbol": "NVDA", "longname": "NVIDIA Corporation"},
+            {"quoteType": "EQUITY", "symbol": "NVDX", "longname": "Other"},
+        ]
+        with self._patch(quotes):
+            match = await resolve_stock_symbol("Nvidia")
+
+        assert match["symbol"] == "NVDA"
+
+    @pytest.mark.asyncio
+    async def test_futures_are_not_a_valid_resolution(self):
+        with self._patch([{"quoteType": "FUTURE", "symbol": "NQ=F", "shortname": "x"}]):
+            assert await resolve_stock_symbol("nasdaq futures") is None
+
+    @pytest.mark.asyncio
+    async def test_no_match_returns_none(self):
+        with self._patch([]):
+            assert await resolve_stock_symbol("zzzznotreal") is None
+
+    @pytest.mark.asyncio
+    async def test_blank_query_returns_none_without_searching(self):
+        with patch("mcp_etf_holdings.fetcher.yf.Search") as search:
+            assert await resolve_stock_symbol("   ") is None
+        search.assert_not_called()
+
+
+class TestGetEtfInfos:
+    @pytest.mark.asyncio
+    async def test_preserves_input_order(self, mock_ticker_info):
+        def ticker_factory(symbol, session=None):
+            mock = MagicMock()
+            mock.info = dict(mock_ticker_info, longName=f"Fund {symbol}")
+            return mock
+
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", side_effect=ticker_factory):
+            results = await get_etf_infos(["VTI", "SPY", "QQQ"])
+
+        assert [r["ticker"] for r in results] == ["VTI", "SPY", "QQQ"]
+        assert results[0]["name"] == "Fund VTI"
+
+    @pytest.mark.asyncio
+    async def test_empty_list(self):
+        assert await get_etf_infos([]) == []
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_string_elements(self):
+        with pytest.raises(ValueError, match="list of strings"):
+            await get_etf_infos(["SPY", 42])
