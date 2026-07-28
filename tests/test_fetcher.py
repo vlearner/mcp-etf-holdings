@@ -25,6 +25,7 @@ from mcp_etf_holdings.fetcher import (
     _expense_ratio_fraction,
     search_symbols,
 )
+from mcp_etf_holdings.top_etfs import ETF_THEMES, TOP_ETFS, local_etf_matches
 
 
 class TestTickerValidation:
@@ -712,6 +713,219 @@ class TestGetEtfInfos:
     async def test_rejects_non_string_elements(self):
         with pytest.raises(ValueError, match="list of strings"):
             await get_etf_infos(["SPY", 42])
+
+
+class TestWhitespaceTolerance:
+    """A padded ticker is a typo to trim, not a malformed symbol to reject."""
+
+    def test_info_strips_before_validating(self, mock_ticker_with_info):
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+            result = _etf_info_sync(" voo ")
+
+        assert result["ticker"] == "VOO"
+        assert result["name"] == "SPDR S&P 500 ETF Trust"
+
+    def test_holdings_strip_before_validating(self, mock_ticker_with_info):
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+            holdings = _etf_holdings_sync("\tvoo\n")
+
+        assert [h["symbol"] for h in holdings][:2] == ["AAPL", "MSFT"]
+
+    def test_padded_and_bare_forms_share_one_cache_entry(self, mock_ticker_with_info):
+        with patch(
+            "mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info
+        ) as mock_yf:
+            first = _etf_info_sync("VOO")
+            second = _etf_info_sync("  voo  ")
+
+        assert first == second
+        assert mock_yf.call_count == 1
+
+    def test_interior_whitespace_is_still_rejected(self):
+        with pytest.raises(ValueError, match="Invalid ticker format"):
+            _etf_info_sync("SP Y")
+
+    def test_whitespace_only_ticker_is_still_rejected(self):
+        with pytest.raises(ValueError, match="Invalid ticker format"):
+            _etf_holdings_sync("   ")
+
+    def test_the_error_message_quotes_what_the_caller_passed(self):
+        with pytest.raises(ValueError, match=r"Invalid ticker format: not a ticker"):
+            _etf_info_sync("not a ticker")
+
+    @pytest.mark.asyncio
+    async def test_find_etfs_holding_stock_strips_the_stock(self, mock_ticker_with_info):
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+            results = await find_etfs_holding_stock(" aapl ", etf_universe=["SPY"])
+
+        assert [r["stock"] for r in results] == ["AAPL"]
+
+    def test_sync_reverse_lookup_strips_the_stock(self, mock_ticker_with_info):
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+            results = _find_etfs_holding_stock_sync(" aapl ", ["SPY"], 10)
+
+        assert [r["stock"] for r in results] == ["AAPL"]
+
+
+class TestBatchInfoDegradesGracefully:
+    """One unusable entry in a batch must not raise the whole batch away."""
+
+    @staticmethod
+    def _named_funds(mock_ticker_info):
+        def factory(symbol, session=None):
+            mock = MagicMock()
+            mock.info = dict(mock_ticker_info, longName=f"Fund {symbol}")
+            return mock
+
+        return patch("mcp_etf_holdings.fetcher.yf.Ticker", side_effect=factory)
+
+    @pytest.mark.asyncio
+    async def test_a_fund_name_yields_an_empty_row(self, mock_ticker_info):
+        with self._named_funds(mock_ticker_info):
+            results = await get_etf_infos(["VOO", "Vanguard S&P 500"])
+
+        assert results[0]["name"] == "Fund VOO"
+        assert results[1] == {
+            "ticker": "VANGUARD S&P 500",
+            "name": "",
+            "category": "",
+            "total_assets": None,
+            "expense_ratio": None,
+            "yield": None,
+            "ytd_return": None,
+            "three_year_return": None,
+            "five_year_return": None,
+            "nav_price": None,
+            "currency": "USD",
+        }
+
+    @pytest.mark.asyncio
+    async def test_the_empty_row_matches_an_unknown_symbols_row(
+        self, mock_ticker_info, mock_ticker_no_info
+    ):
+        """ZZZZZ is well-formed but unknown; a fund name must degrade the same way."""
+        with patch(
+            "mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_no_info
+        ):
+            unknown = await get_etf_infos(["ZZZZZ"])
+
+        with self._named_funds(mock_ticker_info):
+            unusable = await get_etf_infos(["Vanguard S&P 500"])
+
+        assert unknown[0].keys() == unusable[0].keys()
+        assert all(unknown[0][k] == unusable[0][k] for k in unknown[0] if k != "ticker")
+
+    @pytest.mark.asyncio
+    async def test_input_order_survives_a_bad_entry(self, mock_ticker_info):
+        with self._named_funds(mock_ticker_info):
+            results = await get_etf_infos(["VOO", "Vanguard S&P 500", "QQQ"])
+
+        assert [r["ticker"] for r in results] == ["VOO", "VANGUARD S&P 500", "QQQ"]
+        assert [bool(r["name"]) for r in results] == [True, False, True]
+
+    @pytest.mark.asyncio
+    async def test_a_single_fetch_still_reports_the_bad_ticker(self):
+        """Only the batch is forgiving — a one-shot lookup keeps its error."""
+        with pytest.raises(ValueError, match="Invalid ticker format"):
+            await get_etf_info("Vanguard S&P 500")
+
+    @pytest.mark.asyncio
+    async def test_non_string_entries_are_still_rejected(self):
+        with pytest.raises(ValueError, match="list of strings"):
+            await get_etf_infos(["SPY", None])
+
+
+class TestLocalEtfSearch:
+    """search_etfs tops Yahoo's answer up from the curated universe."""
+
+    def _patch(self, quotes):
+        mock_search = MagicMock()
+        mock_search.quotes = quotes
+        return patch("mcp_etf_holdings.fetcher.yf.Search", return_value=mock_search)
+
+    def test_every_indexed_fund_is_in_the_universe(self):
+        for keywords, funds in ETF_THEMES.values():
+            assert keywords, "a theme with no keywords can never match"
+            for ticker, name in funds:
+                assert ticker in TOP_ETFS, f"{ticker} is indexed but not in TOP_ETFS"
+                assert name.strip(), f"{ticker} has no name"
+
+    def test_keywords_match_whole_words_only(self):
+        assert local_etf_matches("ethereum funds")
+        assert not local_etf_matches("something else entirely")
+        assert not local_etf_matches("bitcoins")
+
+    def test_punctuation_is_folded_away(self):
+        assert local_etf_matches("semiconductor?") == local_etf_matches("semiconductor")
+        assert [t for t, _ in local_etf_matches("s&p 500")][0] == "SPY"
+
+    def test_a_query_matching_nothing_returns_nothing(self):
+        assert local_etf_matches("zzzznotreal") == []
+        assert local_etf_matches("") == []
+        assert local_etf_matches(None) == []
+
+    def test_a_fund_in_two_themes_is_listed_once(self):
+        matches = local_etf_matches("crypto")
+        tickers = [t for t, _ in matches]
+        assert len(tickers) == len(set(tickers))
+        assert "IBIT" in tickers and "ETHA" in tickers
+
+    @pytest.mark.asyncio
+    async def test_sp500_returns_funds_where_yahoo_returned_none(self):
+        index_quotes = [
+            {"quoteType": "INDEX", "symbol": "^GSPC", "shortname": "S&P 500"},
+            {"quoteType": "FUTURE", "symbol": "ES=F", "shortname": "E-Mini S&P 500"},
+        ]
+        with self._patch(index_quotes):
+            results = await search_etfs("S&P 500", limit=5)
+
+        assert [r["symbol"] for r in results] == ["SPY", "IVV", "VOO", "SPLG", "RSP"]
+        assert all(r["type"] == "ETF" for r in results)
+
+    @pytest.mark.asyncio
+    async def test_local_hits_are_appended_after_yahoos(self):
+        with self._patch(
+            [{"quoteType": "ETF", "symbol": "GBTC", "longname": "Grayscale Bitcoin Trust ETF"}]
+        ):
+            results = await search_etfs("bitcoin", limit=4)
+
+        assert [r["symbol"] for r in results] == ["GBTC", "IBIT", "FBTC", "ARKB"]
+
+    @pytest.mark.asyncio
+    async def test_the_limit_caps_the_merged_list(self):
+        with self._patch(
+            [{"quoteType": "ETF", "symbol": "GBTC", "longname": "Grayscale Bitcoin Trust ETF"}]
+        ):
+            results = await search_etfs("bitcoin", limit=2)
+
+        assert [r["symbol"] for r in results] == ["GBTC", "IBIT"]
+
+    @pytest.mark.asyncio
+    async def test_an_unrelated_query_is_not_padded(self):
+        quotes = [{"quoteType": "ETF", "symbol": "SMH", "longname": "VanEck Semiconductor ETF"}]
+        with self._patch(quotes):
+            results = await search_etfs("nvidia", limit=10)
+
+        assert [r["symbol"] for r in results] == ["SMH"]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_search_is_not_topped_up(self):
+        """An outage is indistinguishable from a miss; don't dress a static list as a result."""
+        with patch(
+            "mcp_etf_holdings.fetcher.yf.Search", side_effect=Exception("network down")
+        ):
+            assert await search_etfs("bitcoin", limit=10) == []
+
+    @pytest.mark.asyncio
+    async def test_local_padding_does_not_leak_into_symbol_search(self):
+        """lookup_symbol's path is unfiltered Yahoo — no curated funds in it."""
+        with self._patch([]):
+            assert await search_symbols("bitcoin", limit=10) == []
+
+    @pytest.mark.asyncio
+    async def test_bad_limit_is_still_rejected(self):
+        with pytest.raises(ValueError, match="Limit must be"):
+            await search_etfs("bitcoin", limit=0)
 
 
 class TestCacheTtlConfig:

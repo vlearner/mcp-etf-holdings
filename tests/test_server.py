@@ -5,6 +5,7 @@ Exercises the seven registered tools end-to-end (argument handling,
 fetcher calls, output formatting) with yfinance mocked out.
 """
 
+import pandas as pd
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -430,6 +431,220 @@ class TestCompanyNameFallback:
         assert "Interpreted" not in out
 
 
+class TestShareClassDotForm:
+    """Yahoo holds BRK-B; users type BRK.B. The dot form must find the fund.
+
+    Before the dot->dash retry this fell through to the company-name resolver,
+    which matched BRK.B to BRKC — an unrelated YieldMax fund — and answered
+    about it. A wrong-fund answer reads exactly like a right one, so these
+    cases guard the retry, not just the happy path.
+    """
+
+    @staticmethod
+    def _patch_universe_holding(symbol: str, weight: float):
+        """Every ETF in the universe holds exactly `symbol`, at `weight` percent."""
+        df = pd.DataFrame(
+            {"Symbol": [symbol], "Name": [f"{symbol} Inc."], "% Assets": [weight]}
+        )
+
+        def factory(ticker, session=None):
+            mock = MagicMock()
+            mock.info = {"longName": f"Fund {ticker}", "shortName": ticker}
+            funds = MagicMock()
+            funds.top_holdings = df
+            mock.funds_data = funds
+            return mock
+
+        return patch("mcp_etf_holdings.fetcher.yf.Ticker", side_effect=factory)
+
+    @pytest.mark.asyncio
+    async def test_dot_form_finds_the_dash_form_and_discloses_it(self):
+        with self._patch_universe_holding("BRK-B", 12.07):
+            out = await server.find_etfs_holding_stock(
+                "BRK.B", custom_etf_universe='["XLF"]'
+            )
+
+        assert '> Interpreted "BRK.B" as **BRK-B**' in out
+        assert "**BRK-B** appears in the top holdings" in out
+        assert "| XLF | 12.07% | #1 |" in out
+
+    @pytest.mark.asyncio
+    async def test_dash_retry_happens_before_the_name_resolver(self):
+        """The resolver is what returned BRKC — the retry must beat it to the answer."""
+        with self._patch_universe_holding("BRK-B", 12.07):
+            with patch("mcp_etf_holdings.server.resolve_stock_symbol") as resolver:
+                out = await server.find_etfs_holding_stock(
+                    "BRK.B", custom_etf_universe='["XLF"]'
+                )
+
+        resolver.assert_not_called()
+        assert "**BRK-B** appears in the top holdings" in out
+
+    @pytest.mark.asyncio
+    async def test_stock_exposure_summary_gets_the_same_retry(self):
+        with self._patch_universe_holding("BRK-B", 12.07):
+            out = await server.stock_exposure_summary("BRK.B", limit=1)
+
+        assert '> Interpreted "BRK.B" as **BRK-B**' in out
+        assert "ETF exposure to **BRK-B**" in out
+
+    @pytest.mark.asyncio
+    async def test_padded_dot_form_is_handled(self):
+        with self._patch_universe_holding("BRK-B", 12.07):
+            out = await server.find_etfs_holding_stock(
+                "  brk.b  ", custom_etf_universe='["XLF"]'
+            )
+
+        assert "**BRK-B** appears in the top holdings" in out
+
+    @pytest.mark.asyncio
+    async def test_dot_free_ticker_never_pays_for_a_retry(self):
+        """A plain symbol must not trigger a second universe scan."""
+        with self._patch_universe_holding("AAPL", 7.0):
+            with patch(
+                "mcp_etf_holdings.server._find_etfs_holding_stock",
+                wraps=server._find_etfs_holding_stock,
+            ) as lookup:
+                out = await server.find_etfs_holding_stock(
+                    "AAPL", custom_etf_universe='["SPY"]'
+                )
+
+        assert lookup.call_count == 1
+        assert "Interpreted" not in out
+
+    @pytest.mark.asyncio
+    async def test_name_resolver_still_runs_when_the_dash_form_misses(self):
+        """The retry is an extra step, not a replacement for name resolution."""
+        quotes = [{"quoteType": "EQUITY", "symbol": "AAPL", "longname": "Apple Inc."}]
+        with self._patch_universe_holding("AAPL", 7.0), _patch_search(quotes):
+            out = await server.find_etfs_holding_stock(
+                "APPLE.INC", custom_etf_universe='["SPY"]'
+            )
+
+        assert '> Interpreted "APPLE.INC" as **AAPL** (Apple Inc.)' in out
+        assert "**AAPL** appears in the top holdings" in out
+
+
+class TestCompareEtfsUnusableEntry:
+    """A fund name among the tickers must not discard the funds that resolved."""
+
+    @staticmethod
+    def _patch_named_funds(mock_ticker_info):
+        def factory(symbol, session=None):
+            mock = MagicMock()
+            mock.info = dict(mock_ticker_info, longName=f"Fund {symbol}")
+            mock.funds_data = None
+            return mock
+
+        return patch("mcp_etf_holdings.fetcher.yf.Ticker", side_effect=factory)
+
+    @pytest.mark.asyncio
+    async def test_fund_name_does_not_kill_the_batch(self, mock_ticker_info):
+        with self._patch_named_funds(mock_ticker_info):
+            out = await server.compare_etfs(["VOO", "Vanguard S&P 500"])
+
+        assert "Comparing 2 ETF(s)" in out
+        assert "| VOO | Fund VOO |" in out
+        assert "| VANGUARD S&P 500 | — |" in out
+        assert "No data returned for: VANGUARD S&P 500" in out
+
+    @pytest.mark.asyncio
+    async def test_valid_rows_keep_their_order_around_a_bad_entry(self, mock_ticker_info):
+        with self._patch_named_funds(mock_ticker_info):
+            out = await server.compare_etfs(["VOO", "Vanguard S&P 500", "QQQ"])
+
+        tickers = [
+            line.split("|")[1].strip()
+            for line in out.splitlines()
+            if line.startswith("| ") and "---" not in line
+        ]
+        assert tickers == ["Ticker", "VOO", "VANGUARD S&P 500", "QQQ"]
+
+    @pytest.mark.asyncio
+    async def test_every_entry_unusable_still_renders_a_table(self, mock_ticker_info):
+        with self._patch_named_funds(mock_ticker_info):
+            out = await server.compare_etfs(["Vanguard S&P 500", "iShares Core"])
+
+        assert "| Ticker | Name |" in out
+        assert "No data returned for: VANGUARD S&P 500, ISHARES CORE" in out
+
+
+class TestPaddedTickerInput:
+    """Surrounding whitespace is a typo, not a malformed ticker."""
+
+    @pytest.mark.asyncio
+    async def test_etf_info_accepts_a_padded_ticker(self, mock_ticker_with_info):
+        with _patch_ticker(mock_ticker_with_info):
+            out = await server.etf_info(" voo ")
+
+        assert out.startswith("**VOO** – SPDR S&P 500 ETF Trust")
+
+    @pytest.mark.asyncio
+    async def test_etf_holdings_accepts_a_padded_ticker(self, mock_ticker_with_info):
+        with _patch_ticker(mock_ticker_with_info):
+            out = await server.etf_holdings(" voo ")
+
+        assert "Top holdings of **VOO**" in out
+        assert "AAPL" in out
+
+    @pytest.mark.asyncio
+    async def test_compare_etfs_accepts_padded_tickers(self, mock_ticker_with_info):
+        with _patch_ticker(mock_ticker_with_info):
+            out = await server.compare_etfs([" voo ", "\tqqq\n"])
+
+        assert "| VOO |" in out and "| QQQ |" in out
+        assert "No data returned" not in out
+
+    @pytest.mark.asyncio
+    async def test_find_etfs_holding_stock_accepts_a_padded_stock(
+        self, mock_ticker_with_info
+    ):
+        with _patch_ticker(mock_ticker_with_info):
+            out = await server.find_etfs_holding_stock(
+                " aapl ", custom_etf_universe='["SPY"]'
+            )
+
+        assert "**AAPL** appears in the top holdings" in out
+
+
+class TestSearchEtfsLocalUniverse:
+    """Yahoo's search misses funds that are sitting in TOP_ETFS."""
+
+    @pytest.mark.asyncio
+    async def test_sp500_query_answers_from_the_local_universe(self):
+        """Yahoo answers "S&P 500" with indices and futures; the ETF filter drops them all."""
+        index_quotes = [
+            {"quoteType": "INDEX", "symbol": "^GSPC", "shortname": "S&P 500"},
+            {"quoteType": "FUTURE", "symbol": "ES=F", "shortname": "E-Mini S&P 500"},
+        ]
+        with _patch_search(index_quotes):
+            out = await server.search_etfs("S&P 500")
+
+        assert "| VOO | Vanguard S&P 500 ETF |" in out
+        assert "SPY" in out and "IVV" in out
+        assert "^GSPC" not in out and "ES=F" not in out
+
+    @pytest.mark.asyncio
+    async def test_bitcoin_query_adds_the_funds_yahoo_omits(self):
+        with _patch_search(
+            [{"quoteType": "ETF", "symbol": "GBTC", "longname": "Grayscale Bitcoin Trust ETF"}]
+        ):
+            out = await server.search_etfs("bitcoin")
+
+        assert "IBIT" in out and "FBTC" in out
+        assert out.count("| GBTC |") == 1  # Yahoo's hit, not duplicated locally
+
+    @pytest.mark.asyncio
+    async def test_yahoo_matches_are_listed_before_local_ones(self):
+        with _patch_search(
+            [{"quoteType": "ETF", "symbol": "BITO", "longname": "ProShares Bitcoin Strategy ETF"}]
+        ):
+            out = await server.search_etfs("bitcoin")
+
+        rows = [ln for ln in out.splitlines() if ln.startswith("| ") and "---" not in ln]
+        assert rows[1].startswith("| BITO |")
+
+
 class TestPromptRegistration:
     @pytest.mark.asyncio
     async def test_all_prompts_registered(self):
@@ -630,6 +845,20 @@ class TestDefensiveValidationPaths:
 
         assert 'Interpreted "Nvidia" as **NVDA**' in out
         assert "was not found" in out
+
+    @pytest.mark.asyncio
+    async def test_failed_dash_retry_degrades_to_not_found(self):
+        """A raising dash retry must fall through, not surface a traceback."""
+        with _patch_search([]), patch(
+            "mcp_etf_holdings.server._find_etfs_holding_stock",
+            side_effect=ValueError("boom"),
+        ):
+            out = await server.find_etfs_holding_stock(
+                "BRK.B", custom_etf_universe='["XLF"]'
+            )
+
+        assert "'BRK.B' was not found" in out
+        assert "Interpreted" not in out
 
 
 class TestEntryPoint:

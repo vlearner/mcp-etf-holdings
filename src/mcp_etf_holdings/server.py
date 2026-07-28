@@ -105,7 +105,8 @@ async def _lookup_with_name_fallback(
     result. Only runs on a miss, so the happy path costs nothing.
 
     Returns (results, symbol_used, disclosure_note). The note is non-empty
-    whenever a name was interpreted as a ticker; the guess is never silent.
+    whenever the symbol searched is not the one the user typed; the guess is
+    never silent.
     """
     symbol = stock.strip().upper()
 
@@ -120,6 +121,25 @@ async def _lookup_with_name_fallback(
 
     if results:
         return results, symbol, ""
+
+    # Yahoo writes share classes with a dash (BRK-B, BF-B); people type the dot
+    # form they see everywhere else. Retry that before the name search: left to
+    # the resolver, "BRK.B" fuzzy-matches an unrelated fund (BRKC) and the
+    # answer comes back confident and wrong.
+    dashed = symbol.replace(".", "-")
+    if dashed != symbol:
+        try:
+            results = await _find_etfs_holding_stock(
+                dashed, etf_universe=universe, limit=limit
+            )
+        except ValueError:
+            results = []
+        if results:
+            note = (
+                f'> Interpreted "{stock.strip()}" as **{dashed}** '
+                "(Yahoo writes share classes with a dash).\n"
+            )
+            return results, dashed, note
 
     match = await resolve_stock_symbol(stock)
     if not match:
@@ -277,7 +297,7 @@ async def etf_holdings(
         rows,
         align=["right", "left", "left", "right"],
     )
-    return f"Top holdings of **{ticker.upper()}**:\n\n{table}"
+    return f"Top holdings of **{ticker.strip().upper()}**:\n\n{table}"
 
 
 # ---------------------------------------------------------------------------
@@ -446,7 +466,11 @@ async def search_etfs(
     ] = 10,
 ) -> str:
     """
-    Search for ETFs by name, theme, or category using Yahoo Finance search.
+    Search for ETFs by name, theme, or category.
+
+    Yahoo Finance search is the primary source; its hits are topped up from a
+    curated index over the built-in ETF universe, which covers themes Yahoo's
+    search answers poorly ("S&P 500", "bitcoin"). Live matches rank first.
 
     Returns matching ETF tickers with their full names and exchanges.
     Useful for discovering ETFs to pass to etf_info, compare_etfs,

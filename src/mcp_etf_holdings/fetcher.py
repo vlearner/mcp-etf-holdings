@@ -19,7 +19,7 @@ from typing import Any
 
 import yfinance as yf
 
-from .top_etfs import TOP_ETFS
+from .top_etfs import TOP_ETFS, local_etf_matches
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,16 @@ _TICKER_PATTERN = re.compile(r"^[A-Z0-9.\-]{1,10}$")
 
 def _is_valid_ticker(ticker: str) -> bool:
     return isinstance(ticker, str) and _TICKER_PATTERN.match(ticker.upper()) is not None
+
+
+def _normalize_ticker(ticker: Any) -> Any:
+    """Upper-case and trim a ticker, leaving non-strings for the validator.
+
+    Tickers arrive pasted, quoted, and padded — " voo " is a valid symbol with
+    stray whitespace, not a malformed one. Case was already normalized here;
+    whitespace has to be too, or validation rejects a symbol we can handle.
+    """
+    return ticker.strip().upper() if isinstance(ticker, str) else ticker
 
 
 class _TTLCache:
@@ -159,12 +169,34 @@ def _expense_ratio_fraction(info: dict[str, Any]) -> float | None:
     return None
 
 
+def _empty_info(ticker: str) -> dict[str, Any]:
+    """The "no data" record every info path returns on a miss.
+
+    One shape for every miss — unknown symbol, failed fetch, cached failure —
+    so callers have a single case to render and tests can compare them.
+    """
+    return {
+        "ticker": _normalize_ticker(ticker),
+        "name": "",
+        "category": "",
+        "total_assets": None,
+        "expense_ratio": None,
+        "yield": None,
+        "ytd_return": None,
+        "three_year_return": None,
+        "five_year_return": None,
+        "nav_price": None,
+        "currency": "USD",
+    }
+
+
 def _etf_info_sync(ticker: str) -> dict[str, Any]:
-    if not _is_valid_ticker(ticker):
+    normalized = _normalize_ticker(ticker)
+    if not _is_valid_ticker(normalized):
         logger.warning("Invalid ticker format: %s", ticker)
         raise ValueError(f"Invalid ticker format: {ticker}")
 
-    ticker = ticker.upper()
+    ticker = normalized
     cached = _info_cache.get(ticker)
     if cached is not None:
         return cached
@@ -172,19 +204,7 @@ def _etf_info_sync(ticker: str) -> dict[str, Any]:
     # Check error cache to avoid retrying transient failures too soon
     error_cached = _error_cache.get(f"error:info:{ticker}")
     if error_cached is not None:
-        return {
-            "ticker": ticker,
-            "name": "",
-            "category": "",
-            "total_assets": None,
-            "expense_ratio": None,
-            "yield": None,
-            "ytd_return": None,
-            "three_year_return": None,
-            "five_year_return": None,
-            "nav_price": None,
-            "currency": "USD",
-        }
+        return _empty_info(ticker)
 
     try:
         t = yf.Ticker(ticker, session=None)
@@ -208,27 +228,16 @@ def _etf_info_sync(ticker: str) -> dict[str, Any]:
     except Exception:
         logger.exception("Failed to fetch info for ticker %s", ticker)
         _error_cache.set(f"error:info:{ticker}", True)
-        return {
-            "ticker": ticker,
-            "name": "",
-            "category": "",
-            "total_assets": None,
-            "expense_ratio": None,
-            "yield": None,
-            "ytd_return": None,
-            "three_year_return": None,
-            "five_year_return": None,
-            "nav_price": None,
-            "currency": "USD",
-        }
+        return _empty_info(ticker)
 
 
 def _etf_holdings_sync(ticker: str) -> list[dict[str, Any]]:
-    if not _is_valid_ticker(ticker):
+    normalized = _normalize_ticker(ticker)
+    if not _is_valid_ticker(normalized):
         logger.warning("Invalid ticker format: %s", ticker)
         raise ValueError(f"Invalid ticker format: {ticker}")
 
-    ticker = ticker.upper()
+    ticker = normalized
     cached = _holdings_cache.get(ticker)
     if cached is not None:
         return cached
@@ -290,28 +299,24 @@ def _etf_holdings_sync(ticker: str) -> list[dict[str, Any]]:
         return []
 
 
-def _search_symbols_sync(
-    query: str, limit: int, quote_types: tuple[str, ...] | None = None
-) -> list[dict[str, Any]]:
-    """Search Yahoo for symbols, optionally restricted to given quote types.
-
-    `quote_types=None` returns everything Yahoo matched (equities, ETFs,
-    futures, indices…); pass e.g. ("ETF",) or ("EQUITY", "ETF") to filter.
-    """
+def _validate_search_args(query: str, limit: int) -> None:
     if not isinstance(query, str) or not query.strip():
         raise ValueError("Query must be a non-empty string")
     if not isinstance(limit, int) or limit < 1 or limit > 500:
         raise ValueError("Limit must be an integer between 1 and 500")
 
-    wanted = {t.upper() for t in quote_types} if quote_types else None
 
-    try:
-        # Request extra results since unwanted quote types get filtered out.
-        search = yf.Search(query, max_results=min(limit * 3, 50))
-        quotes = search.quotes or []
-    except Exception:
-        logger.exception("Search failed for query %s", query)
-        return []
+def _yahoo_quotes(query: str, limit: int) -> list[dict[str, Any]]:
+    """Raw Yahoo search hits. Raises when the search itself fails."""
+    # Request extra results since unwanted quote types get filtered out.
+    search = yf.Search(query, max_results=min(limit * 3, 50))
+    return search.quotes or []
+
+
+def _quotes_to_results(
+    quotes: list[dict[str, Any]], limit: int, quote_types: tuple[str, ...] | None
+) -> list[dict[str, Any]]:
+    wanted = {t.upper() for t in quote_types} if quote_types else None
 
     results: list[dict[str, Any]] = []
     for q in quotes:
@@ -331,13 +336,66 @@ def _search_symbols_sync(
     return results
 
 
+def _search_symbols_sync(
+    query: str, limit: int, quote_types: tuple[str, ...] | None = None
+) -> list[dict[str, Any]]:
+    """Search Yahoo for symbols, optionally restricted to given quote types.
+
+    `quote_types=None` returns everything Yahoo matched (equities, ETFs,
+    futures, indices…); pass e.g. ("ETF",) or ("EQUITY", "ETF") to filter.
+    """
+    _validate_search_args(query, limit)
+
+    try:
+        quotes = _yahoo_quotes(query, limit)
+    except Exception:
+        logger.exception("Search failed for query %s", query)
+        return []
+
+    return _quotes_to_results(quotes, limit, quote_types)
+
+
+def _search_etfs_sync(query: str, limit: int) -> list[dict[str, Any]]:
+    """Yahoo's ETF matches for `query`, topped up from the curated universe.
+
+    Yahoo's search alone answers "S&P 500" with indices and futures that the
+    ETF filter drops, and "bitcoin" with GBTC while IBIT and FBTC — both in
+    TOP_ETFS — never appear. Local matches fill those gaps, after Yahoo's own
+    hits so a live match still ranks first.
+
+    A search that *failed* is not topped up: an outage is indistinguishable
+    from a query nothing matched, and a curated list served under those
+    conditions would read as a live result.
+    """
+    _validate_search_args(query, limit)
+
+    try:
+        quotes = _yahoo_quotes(query, limit)
+    except Exception:
+        logger.exception("Search failed for query %s", query)
+        return []
+
+    results = _quotes_to_results(quotes, limit, ("ETF",))
+    seen = {str(r["symbol"]).upper() for r in results if r.get("symbol")}
+
+    for ticker, name in local_etf_matches(query):
+        if len(results) >= limit:
+            break
+        if ticker in seen:
+            continue
+        seen.add(ticker)
+        results.append({"symbol": ticker, "name": name, "exchange": "", "type": "ETF"})
+
+    return results
+
+
 def _find_etfs_holding_stock_sync(
     stock_ticker: str, etf_universe: list[str], limit: int
 ) -> list[dict[str, Any]]:
-    if not _is_valid_ticker(stock_ticker):
+    stock = _normalize_ticker(stock_ticker)
+    if not _is_valid_ticker(stock):
         raise ValueError(f"Invalid stock ticker: {stock_ticker}")
 
-    stock = stock_ticker.upper()
     matches: list[dict[str, Any]] = []
 
     for etf in etf_universe:
@@ -387,6 +445,22 @@ async def get_etf_holdings(ticker: str) -> list[dict[str, Any]]:
         return await loop.run_in_executor(_executor, _etf_holdings_sync, ticker)
 
 
+async def _info_or_empty(ticker: str) -> dict[str, Any]:
+    """One entry of a batch fetch: a bad entry yields an empty row, not a raise.
+
+    A batch is a list of independent lookups. When one of them is a fund name
+    rather than a symbol — "Vanguard S&P 500", which the ticker pattern
+    rejects — it must not take the rest of the list down with it. The empty
+    row is the same shape an unknown-but-well-formed symbol (ZZZZZ) produces,
+    and callers already render that as "no data returned".
+    """
+    try:
+        return await get_etf_info(ticker)
+    except ValueError:
+        logger.debug("Batch fetch skipping unusable ticker: %r", ticker)
+        return _empty_info(ticker)
+
+
 async def get_etf_infos(tickers: list[str]) -> list[dict[str, Any]]:
     """Fetch metadata for several tickers at once, preserving input order.
 
@@ -396,7 +470,7 @@ async def get_etf_infos(tickers: list[str]) -> list[dict[str, Any]]:
     if not isinstance(tickers, list) or not all(isinstance(t, str) for t in tickers):
         raise ValueError("tickers must be a list of strings")
 
-    return list(await asyncio.gather(*(get_etf_info(t) for t in tickers)))
+    return list(await asyncio.gather(*(_info_or_empty(t) for t in tickers)))
 
 
 async def search_symbols(
@@ -442,7 +516,16 @@ async def resolve_stock_symbol(query: str) -> dict[str, Any] | None:
 
 
 async def search_etfs(query: str, *, limit: int = 10) -> list[dict[str, Any]]:
-    return await search_symbols(query, limit=limit, quote_types=("ETF",))
+    if not isinstance(limit, int) or limit < 1 or limit > 500:
+        raise ValueError("Limit must be between 1 and 500")
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+
+    async with _get_fetch_semaphore():
+        return await loop.run_in_executor(_executor, _search_etfs_sync, query, limit)
 
 
 async def find_etfs_holding_stock(
@@ -475,7 +558,7 @@ async def find_etfs_holding_stock(
     seen = set()
     universe_dedup = [t for t in universe if not (t in seen or seen.add(t))]
 
-    stock = stock_ticker.upper()
+    stock = _normalize_ticker(stock_ticker)
     matches: list[dict[str, Any]] = []
 
     try:

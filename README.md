@@ -248,6 +248,10 @@ Finds ETFs by name, theme, or category.
 Returns matching ETF tickers with names and exchanges. To resolve a *stock* name instead
 of finding funds, use `lookup_symbol`.
 
+Results come from Yahoo's search, topped up from a curated keyword index over the local
+universe — Yahoo alone returns nothing for `"S&P 500"` and misses `IBIT`/`FBTC` for
+`"bitcoin"`. Live matches are listed first.
+
 ---
 
 ## From source

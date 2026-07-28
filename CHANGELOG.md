@@ -26,6 +26,25 @@ All notable changes to this project are recorded here.
 - Python 3.13 to the test matrix.
 
 ### Fixed
+- `find_etfs_holding_stock("BRK.B")` answered about BRKC, an unrelated YieldMax fund.
+  Yahoo writes share classes with a dash (`BRK-B`), so the dot form matched nothing and
+  fell through to the company-name resolver, which fuzzy-matched a different fund and
+  reported it with full confidence — a silently wrong answer, not an error. The dot form
+  is now retried as a dash before any name search, and the substitution is disclosed.
+  `BRK.B` returns XLF at the top, as `BRK-B` already did.
+- `compare_etfs(["VOO", "Vanguard S&P 500"])` raised and discarded the whole batch,
+  including VOO's valid row. A batch entry that fails ticker validation now degrades to
+  the same empty placeholder row an unknown-but-well-formed symbol (`ZZZZZ`) has always
+  produced. A single-ticker lookup still raises — only the batch is forgiving.
+- `etf_info(" voo ")` raised a `ValueError` on surrounding whitespace. Tickers are now
+  trimmed before validation, so a padded symbol resolves like a bare one and shares its
+  cache entry. Interior whitespace (`SP Y`) is still rejected.
+- `search_etfs` consulted only Yahoo's search API, which answers "S&P 500" with indices
+  and futures that the ETF filter drops, and "bitcoin" with GBTC alone while IBIT and
+  FBTC sit in `TOP_ETFS`. Yahoo's hits are now topped up from a curated keyword index
+  over the local universe, ranked after the live matches. A search that *failed* is not
+  topped up: an outage is indistinguishable from a query nothing matched, and a static
+  list served under those conditions would read as a live result.
 - Tool parameter descriptions never reached the JSON schema. They were written as
   `Annotated[str, "..."]`, and pydantic ignores bare strings in `Annotated` — so every
   parameter on all four original tools was exposed to clients with no description. They
@@ -52,7 +71,7 @@ All notable changes to this project are recorded here.
   `markdown_table` escapes pipes in values — fund names contain them.
 - The ETF universe was documented as "~300" in `top_etfs.py` and "~360" in the README
   while actually holding 364 tickers; all three now say ~365.
-- Test suite expanded from 73 to 185 tests (96% line coverage), adding units for the
+- Test suite expanded from 73 to 226 tests (96% line coverage), adding units for the
   cache-TTL environment validation, negative/error caching, holdings weight
   normalization, every prompt body, and the name-resolution fallback. `pytest-cov` is
   now a dev dependency.
