@@ -17,6 +17,30 @@ def clear_all_caches():
     _error_cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def offline_search():
+    """Default yf.Search to no results so no test can reach the network.
+
+    The company-name fallback in find_etfs_holding_stock / stock_exposure_summary
+    fires whenever a lookup misses, which would otherwise make live calls from
+    tests that never mention search. Tests that care patch over this.
+    """
+    mock_search = MagicMock()
+    mock_search.quotes = []
+    with patch("mcp_etf_holdings.fetcher.yf.Search", return_value=mock_search):
+        yield
+
+
+@pytest.fixture
+def equity_quotes():
+    """Yahoo search results spanning several quote types."""
+    return [
+        {"quoteType": "EQUITY", "symbol": "NVDA", "longname": "NVIDIA Corporation", "exchDisp": "NASDAQ"},
+        {"quoteType": "ETF", "symbol": "SMH", "longname": "VanEck Semiconductor ETF", "exchDisp": "NASDAQ"},
+        {"quoteType": "FUTURE", "symbol": "NQ=F", "shortname": "Nasdaq 100 Futures"},
+    ]
+
+
 @pytest.fixture
 def mock_ticker_info():
     """Mock yfinance Ticker.info for ETF metadata."""

@@ -1,7 +1,7 @@
 """
 Integration tests for the MCP server layer.
 
-Exercises the four registered tools end-to-end (argument handling,
+Exercises the seven registered tools end-to-end (argument handling,
 fetcher calls, output formatting) with yfinance mocked out.
 """
 
@@ -34,10 +34,37 @@ def _patch_search(quotes):
 
 class TestToolRegistration:
     @pytest.mark.asyncio
-    async def test_all_four_tools_registered(self):
+    async def test_all_tools_registered(self):
         tools = await server.mcp.list_tools()
         names = {t.name for t in tools}
-        assert names == {"etf_info", "etf_holdings", "find_etfs_holding_stock", "search_etfs"}
+        assert names == {
+            "etf_info",
+            "compare_etfs",
+            "etf_holdings",
+            "find_etfs_holding_stock",
+            "stock_exposure_summary",
+            "search_etfs",
+            "lookup_symbol",
+        }
+
+    @pytest.mark.asyncio
+    async def test_every_parameter_has_a_description(self):
+        """A bare string in Annotated[...] is silently dropped by pydantic.
+
+        Descriptions must be wrapped in Field(description=...) or the model
+        sees an untyped, unexplained parameter.
+        """
+        tools = await server.mcp.list_tools()
+        for tool in tools:
+            for name, schema in tool.inputSchema["properties"].items():
+                assert schema.get("description"), f"{tool.name}.{name} has no description"
+
+    @pytest.mark.asyncio
+    async def test_compare_etfs_takes_an_array_not_a_string(self):
+        tools = {t.name: t for t in await server.mcp.list_tools()}
+        schema = tools["compare_etfs"].inputSchema["properties"]["tickers"]
+        assert schema["type"] == "array"
+        assert schema["items"]["type"] == "string"
 
     @pytest.mark.asyncio
     async def test_tools_callable_via_mcp_protocol(self, mock_ticker_with_info):
@@ -74,7 +101,7 @@ class TestEtfInfoTool:
         with _patch_ticker(mock_ticker):
             out = await server.etf_info("QQQ")
 
-        assert "Expense ratio: 0.18%" in out
+        assert "Expense ratio : 0.18%" in out
         assert "18.00%" not in out
 
     @pytest.mark.asyncio
@@ -84,7 +111,7 @@ class TestEtfInfoTool:
         with _patch_ticker(mock_ticker):
             out = await server.etf_info("MYST")
 
-        assert "Expense ratio: N/A" in out
+        assert "Expense ratio : N/A" in out
 
     @pytest.mark.asyncio
     async def test_zero_values_render_as_zero_not_na(self):
@@ -99,9 +126,9 @@ class TestEtfInfoTool:
         with _patch_ticker(mock_ticker):
             out = await server.etf_info("ZERO")
 
-        assert "Expense ratio: 0.00%" in out
+        assert "Expense ratio : 0.00%" in out
         assert "Dividend yield: 0.00%" in out
-        assert "YTD return  : 0.00%" in out
+        assert "YTD return    : 0.00%" in out
 
     @pytest.mark.asyncio
     async def test_millions_aum_formatting(self):
@@ -203,7 +230,7 @@ class TestSearchEtfsTool:
             out = await server.search_etfs("semiconductor")
 
         assert "iShares Semiconductor ETF" in out
-        assert "[NASDAQ]" in out
+        assert "NASDAQ" in out
 
     @pytest.mark.asyncio
     async def test_respects_limit(self):
@@ -234,3 +261,399 @@ class TestSearchEtfsTool:
             out = await server.search_etfs("semiconductor")
 
         assert "No ETFs found" in out
+
+
+class TestCompareEtfsTool:
+    @pytest.mark.asyncio
+    async def test_renders_one_row_per_ticker(self, mock_ticker_with_info):
+        with _patch_ticker(mock_ticker_with_info):
+            out = await server.compare_etfs(["SPY", "QQQ", "VTI"])
+
+        assert "| Ticker | Name | Category | AUM |" in out
+        # header + separator + 3 data rows
+        assert len([ln for ln in out.splitlines() if ln.startswith("|")]) == 5
+        for ticker in ("SPY", "QQQ", "VTI"):
+            assert f"| {ticker} |" in out
+
+    @pytest.mark.asyncio
+    async def test_deduplicates_and_uppercases(self, mock_ticker_with_info):
+        with _patch_ticker(mock_ticker_with_info):
+            out = await server.compare_etfs(["spy", "SPY", " spy "])
+
+        assert "Comparing 1 ETF(s)" in out
+        assert out.count("| SPY |") == 1
+
+    @pytest.mark.asyncio
+    async def test_caps_at_max_compare(self, mock_ticker_with_info):
+        tickers = [f"ETF{i}" for i in range(server.MAX_COMPARE + 3)]
+        with _patch_ticker(mock_ticker_with_info):
+            out = await server.compare_etfs(tickers)
+
+        assert f"Comparing {server.MAX_COMPARE} ETF(s)" in out
+        assert "omitted: ETF10, ETF11, ETF12" in out
+
+    @pytest.mark.asyncio
+    async def test_bad_ticker_keeps_the_good_rows(self, mock_ticker_info):
+        """One unknown ticker must not discard the funds that did resolve."""
+
+        def ticker_factory(symbol, session=None):
+            mock = MagicMock()
+            mock.info = None if symbol == "FAKE" else mock_ticker_info
+            mock.funds_data = None
+            return mock
+
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", side_effect=ticker_factory):
+            out = await server.compare_etfs(["SPY", "FAKE", "VTI"])
+
+        assert "| SPY |" in out and "| VTI |" in out
+        assert "No data returned for: FAKE" in out
+        assert "| FAKE | — |" in out
+
+    @pytest.mark.asyncio
+    async def test_empty_list_is_rejected(self):
+        assert "Provide a list of ETF tickers" in await server.compare_etfs([])
+        assert "Provide a list of ETF tickers" in await server.compare_etfs(["", "  "])
+
+
+class TestLookupSymbolTool:
+    @pytest.mark.asyncio
+    async def test_any_returns_equities_that_search_etfs_drops(self, equity_quotes):
+        with _patch_search(equity_quotes):
+            out = await server.lookup_symbol("nvidia")
+
+        assert "| NVDA | NVIDIA Corporation | EQUITY | NASDAQ |" in out
+        assert "SMH" in out
+        assert "NQ=F" in out  # asset_type 'any' filters nothing
+
+    @pytest.mark.asyncio
+    async def test_stock_filter_excludes_funds(self, equity_quotes):
+        with _patch_search(equity_quotes):
+            out = await server.lookup_symbol("nvidia", asset_type="stock")
+
+        assert "NVDA" in out
+        assert "SMH" not in out and "NQ=F" not in out
+
+    @pytest.mark.asyncio
+    async def test_etf_filter_excludes_stocks(self, equity_quotes):
+        with _patch_search(equity_quotes):
+            out = await server.lookup_symbol("semiconductor", asset_type="ETF")
+
+        assert "SMH" in out
+        assert "NVDA" not in out
+
+    @pytest.mark.asyncio
+    async def test_unknown_asset_type_rejected(self):
+        out = await server.lookup_symbol("nvidia", asset_type="crypto")
+        assert "Unknown asset_type 'crypto'" in out
+
+    @pytest.mark.asyncio
+    async def test_blank_query_rejected(self):
+        assert "non-empty name" in await server.lookup_symbol("   ")
+
+    @pytest.mark.asyncio
+    async def test_no_results_message(self):
+        with _patch_search([]):
+            out = await server.lookup_symbol("zzzznotreal")
+        assert "No symbols found matching 'zzzznotreal'" in out
+
+
+class TestStockExposureSummaryTool:
+    @pytest.mark.asyncio
+    async def test_joins_weight_with_cost_and_size(self, mock_ticker_with_info):
+        with _patch_ticker(mock_ticker_with_info):
+            out = await server.stock_exposure_summary("AAPL", limit=2)
+
+        assert "ETF exposure to **AAPL**" in out
+        assert "| ETF | Name | Weight | Rank | Expense | AUM |" in out
+        assert "7.00%" in out           # weight in the stock
+        assert "$500.00B" in out        # AUM, from the metadata join
+        assert "0.03%" in out           # expense ratio, from the metadata join
+
+    @pytest.mark.asyncio
+    async def test_not_found_message(self, mock_ticker_no_holdings):
+        with _patch_ticker(mock_ticker_no_holdings):
+            out = await server.stock_exposure_summary("NOTHELD")
+
+        assert "'NOTHELD' was not found" in out
+        assert f"{len(TOP_ETFS)} ETFs searched" in out
+
+
+class TestCompanyNameFallback:
+    """A company name where a ticker is expected must resolve, and say so."""
+
+    @pytest.mark.asyncio
+    async def test_find_etfs_resolves_name_and_discloses(
+        self, mock_ticker_with_info, equity_quotes
+    ):
+        with _patch_ticker(mock_ticker_with_info), _patch_search(equity_quotes):
+            out = await server.find_etfs_holding_stock(
+                "Nvidia", custom_etf_universe='["SPY"]'
+            )
+
+        assert '> Interpreted "Nvidia" as **NVDA**' in out
+        assert "**NVDA** appears in the top holdings" in out
+
+    @pytest.mark.asyncio
+    async def test_stock_exposure_resolves_name(
+        self, mock_ticker_with_info, equity_quotes
+    ):
+        with _patch_ticker(mock_ticker_with_info), _patch_search(equity_quotes):
+            out = await server.stock_exposure_summary("Nvidia", limit=1)
+
+        assert '> Interpreted "Nvidia" as **NVDA**' in out
+        assert "ETF exposure to **NVDA**" in out
+
+    @pytest.mark.asyncio
+    async def test_no_resolver_call_when_ticker_already_matches(
+        self, mock_ticker_with_info
+    ):
+        """The fallback is miss-only — a working ticker must not pay for a search."""
+        with _patch_ticker(mock_ticker_with_info):
+            with patch(
+                "mcp_etf_holdings.server.resolve_stock_symbol"
+            ) as resolver:
+                out = await server.find_etfs_holding_stock(
+                    "AAPL", custom_etf_universe='["SPY"]'
+                )
+
+        resolver.assert_not_called()
+        assert "Interpreted" not in out
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_name_reports_plainly(self, mock_ticker_no_holdings):
+        with _patch_ticker(mock_ticker_no_holdings), _patch_search([]):
+            out = await server.find_etfs_holding_stock(
+                "Not A Real Company", custom_etf_universe='["SPY"]'
+            )
+
+        assert "was not found" in out
+        assert "Interpreted" not in out
+
+
+class TestPromptRegistration:
+    @pytest.mark.asyncio
+    async def test_all_prompts_registered(self):
+        prompts = await server.mcp.list_prompts()
+        assert {p.name for p in prompts} == {
+            "etf_deep_dive",
+            "compare_funds",
+            "stock_exposure",
+            "portfolio_checkup",
+            "theme_explorer",
+        }
+
+    @pytest.mark.asyncio
+    async def test_prompt_renders_with_its_argument(self):
+        result = await server.mcp.get_prompt("etf_deep_dive", {"ticker": "SCHD"})
+        text = result.messages[0].content.text
+        assert "SCHD" in text
+        assert "not financial advice" in text
+
+
+class TestNormalizeTickers:
+    """Direct tests for the helper behind compare_etfs' input handling."""
+
+    def test_uppercases_and_strips(self):
+        assert server._normalize_tickers([" spy ", "qqq"]) == ["SPY", "QQQ"]
+
+    def test_preserves_first_occurrence_order(self):
+        assert server._normalize_tickers(["VTI", "SPY", "vti"]) == ["VTI", "SPY"]
+
+    def test_drops_blanks(self):
+        assert server._normalize_tickers(["", "   ", "SPY"]) == ["SPY"]
+
+    def test_skips_non_string_elements(self):
+        assert server._normalize_tickers(["SPY", 42, None, "QQQ"]) == ["SPY", "QQQ"]
+
+    def test_empty_input(self):
+        assert server._normalize_tickers([]) == []
+
+
+class TestLookupWithNameFallback:
+    """Direct tests for the resolution helper shared by two tools."""
+
+    @pytest.mark.asyncio
+    async def test_no_note_when_direct_lookup_succeeds(self, mock_ticker_with_info):
+        with _patch_ticker(mock_ticker_with_info):
+            results, symbol, note = await server._lookup_with_name_fallback(
+                "aapl", limit=5, universe=["SPY"]
+            )
+
+        assert symbol == "AAPL"
+        assert note == ""
+        assert results
+
+    @pytest.mark.asyncio
+    async def test_resolution_to_the_same_symbol_adds_no_note(
+        self, mock_ticker_no_holdings
+    ):
+        """Resolving AAPL -> AAPL is not a substitution worth announcing."""
+        quotes = [{"quoteType": "EQUITY", "symbol": "AAPL", "longname": "Apple Inc."}]
+        with _patch_ticker(mock_ticker_no_holdings), _patch_search(quotes):
+            results, symbol, note = await server._lookup_with_name_fallback(
+                "AAPL", limit=5, universe=["SPY"]
+            )
+
+        assert symbol == "AAPL"
+        assert note == ""
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_note_survives_a_resolution_that_still_finds_nothing(
+        self, mock_ticker_no_holdings
+    ):
+        """The user still needs to know their name was reinterpreted."""
+        quotes = [{"quoteType": "EQUITY", "symbol": "NVDA", "longname": "NVIDIA Corporation"}]
+        with _patch_ticker(mock_ticker_no_holdings), _patch_search(quotes):
+            results, symbol, note = await server._lookup_with_name_fallback(
+                "Nvidia", limit=5, universe=["SPY"]
+            )
+
+        assert results == []
+        assert symbol == "NVDA"
+        assert 'Interpreted "Nvidia" as **NVDA**' in note
+
+    @pytest.mark.asyncio
+    async def test_malformed_input_routes_to_the_resolver(self, mock_ticker_with_info):
+        """'Berkshire Hathaway' fails the ticker regex — resolve, don't raise."""
+        quotes = [{"quoteType": "EQUITY", "symbol": "NVDA", "longname": "NVIDIA Corporation"}]
+        with _patch_ticker(mock_ticker_with_info), _patch_search(quotes):
+            results, symbol, note = await server._lookup_with_name_fallback(
+                "Berkshire Hathaway Inc!", limit=5, universe=["SPY"]
+            )
+
+        assert symbol == "NVDA"
+        assert "Interpreted" in note
+
+    @pytest.mark.asyncio
+    async def test_resolver_result_without_a_symbol_is_ignored(
+        self, mock_ticker_no_holdings
+    ):
+        with _patch_ticker(mock_ticker_no_holdings), _patch_search(
+            [{"quoteType": "EQUITY", "symbol": "", "longname": "Nameless"}]
+        ):
+            results, symbol, note = await server._lookup_with_name_fallback(
+                "whatever", limit=5, universe=["SPY"]
+            )
+
+        assert note == ""
+        assert symbol == "WHATEVER"
+
+
+class TestLimitClamping:
+    """Every limit is clamped rather than rejected, so a bad value still answers."""
+
+    @pytest.mark.asyncio
+    async def test_stock_exposure_summary_clamps_high(self, mock_ticker_with_info):
+        with _patch_ticker(mock_ticker_with_info):
+            out = await server.stock_exposure_summary("AAPL", limit=999)
+
+        assert "25 fund(s)" in out
+
+    @pytest.mark.asyncio
+    async def test_stock_exposure_summary_clamps_low(self, mock_ticker_with_info):
+        with _patch_ticker(mock_ticker_with_info):
+            out = await server.stock_exposure_summary("AAPL", limit=0)
+
+        assert "1 fund(s)" in out
+
+    @pytest.mark.asyncio
+    async def test_lookup_symbol_clamps_high(self, equity_quotes):
+        with _patch_search(equity_quotes * 20):
+            out = await server.lookup_symbol("nvidia", limit=999)
+
+        assert "(25 result(s))" in out
+
+    @pytest.mark.asyncio
+    async def test_search_etfs_clamps_high(self):
+        quotes = [
+            {"quoteType": "ETF", "symbol": f"E{i}", "longname": f"Fund {i}"}
+            for i in range(60)
+        ]
+        with _patch_search(quotes):
+            out = await server.search_etfs("fund", limit=999)
+
+        assert "(25 result(s))" in out
+
+
+class TestPromptContent:
+    """Every prompt body must render and name the tools it is meant to drive."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "name,args,expected_substring,expected_tool",
+        [
+            ("etf_deep_dive", {"ticker": "SCHD"}, "SCHD", "etf_holdings"),
+            ("compare_funds", {"tickers": "SPY, QQQ"}, "SPY, QQQ", "compare_etfs"),
+            ("stock_exposure", {"stock": "Nvidia"}, "Nvidia", "stock_exposure_summary"),
+            ("portfolio_checkup", {"tickers": "VOO, VGT"}, "VOO, VGT", "etf_holdings"),
+            ("theme_explorer", {"theme": "clean energy"}, "clean energy", "search_etfs"),
+        ],
+    )
+    async def test_prompt_renders(self, name, args, expected_substring, expected_tool):
+        result = await server.mcp.get_prompt(name, args)
+        text = result.messages[0].content.text
+
+        assert expected_substring in text
+        assert expected_tool in text
+        assert "not financial advice" in text
+
+    @pytest.mark.asyncio
+    async def test_every_prompt_declares_its_arguments(self):
+        prompts = await server.mcp.list_prompts()
+        for prompt in prompts:
+            assert prompt.arguments, f"{prompt.name} declares no arguments"
+
+
+class TestDefensiveValidationPaths:
+    @pytest.mark.asyncio
+    async def test_blank_stock_is_handled_not_raised(self):
+        """The fetcher raises on a blank ticker; the tool must still answer."""
+        with _patch_search([]):
+            out = await server.find_etfs_holding_stock(
+                "   ", custom_etf_universe='["SPY"]'
+            )
+
+        assert "was not found" in out
+
+    @pytest.mark.asyncio
+    async def test_failure_after_resolution_degrades_to_not_found(self):
+        """If the re-run raises, report not-found — never surface a traceback."""
+        quotes = [{"quoteType": "EQUITY", "symbol": "NVDA", "longname": "NVIDIA Corporation"}]
+        with _patch_search(quotes), patch(
+            "mcp_etf_holdings.server._find_etfs_holding_stock",
+            side_effect=ValueError("boom"),
+        ):
+            out = await server.find_etfs_holding_stock(
+                "Nvidia", custom_etf_universe='["SPY"]'
+            )
+
+        assert 'Interpreted "Nvidia" as **NVDA**' in out
+        assert "was not found" in out
+
+
+class TestEntryPoint:
+    def test_main_runs_the_server_over_stdio(self):
+        with patch.object(server.mcp, "run") as run:
+            server.main()
+
+        run.assert_called_once_with(transport="stdio")
+
+    def test_version_is_exposed(self):
+        from mcp_etf_holdings import __version__
+
+        assert isinstance(__version__, str) and __version__
+
+    def test_version_falls_back_outside_an_install(self):
+        import importlib
+
+        import mcp_etf_holdings
+
+        with patch(
+            "importlib.metadata.version",
+            side_effect=importlib.metadata.PackageNotFoundError,
+        ):
+            reloaded = importlib.reload(mcp_etf_holdings)
+            assert reloaded.__version__ == "0.0.0.dev0"
+
+        importlib.reload(mcp_etf_holdings)

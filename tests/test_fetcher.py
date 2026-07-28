@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import os
 import time
 import pytest
 from unittest.mock import patch, MagicMock
@@ -13,9 +15,15 @@ from mcp_etf_holdings.fetcher import (
     get_etf_holdings,
     find_etfs_holding_stock,
     search_etfs,
+    _search_symbols_sync,
+    resolve_stock_symbol,
+    get_etf_infos,
     _info_cache,
     _holdings_cache,
     _is_valid_ticker,
+    _get_cache_ttl,
+    _expense_ratio_fraction,
+    search_symbols,
 )
 
 
@@ -593,3 +601,289 @@ class TestInputValidation:
     async def test_search_etfs_invalid_query(self):
         with pytest.raises(ValueError, match="non-empty string"):
             await search_etfs("", limit=10)
+
+
+class TestSearchSymbols:
+    """The generalized search, which search_etfs now delegates to."""
+
+    QUOTES = [
+        {"quoteType": "EQUITY", "symbol": "NVDA", "longname": "NVIDIA Corporation", "exchDisp": "NASDAQ"},
+        {"quoteType": "ETF", "symbol": "SMH", "longname": "VanEck Semiconductor ETF", "exchange": "NMS"},
+        {"quoteType": "FUTURE", "symbol": "NQ=F", "shortname": "Nasdaq 100 Futures"},
+    ]
+
+    def _patch(self, quotes):
+        mock_search = MagicMock()
+        mock_search.quotes = quotes
+        return patch("mcp_etf_holdings.fetcher.yf.Search", return_value=mock_search)
+
+    def test_no_filter_returns_every_quote_type(self):
+        with self._patch(self.QUOTES):
+            results = _search_symbols_sync("nvidia", 10)
+
+        assert [r["symbol"] for r in results] == ["NVDA", "SMH", "NQ=F"]
+        assert results[0]["type"] == "EQUITY"
+
+    def test_filter_is_applied(self):
+        with self._patch(self.QUOTES):
+            results = _search_symbols_sync("nvidia", 10, quote_types=("EQUITY",))
+
+        assert [r["symbol"] for r in results] == ["NVDA"]
+
+    def test_filter_is_case_insensitive(self):
+        with self._patch(self.QUOTES):
+            results = _search_symbols_sync("nvidia", 10, quote_types=("etf",))
+
+        assert [r["symbol"] for r in results] == ["SMH"]
+
+    def test_limit_truncates(self):
+        with self._patch(self.QUOTES):
+            results = _search_symbols_sync("nvidia", 2)
+
+        assert len(results) == 2
+
+    def test_search_failure_returns_empty(self):
+        with patch(
+            "mcp_etf_holdings.fetcher.yf.Search", side_effect=Exception("network down")
+        ):
+            assert _search_symbols_sync("nvidia", 10) == []
+
+    @pytest.mark.asyncio
+    async def test_search_etfs_still_filters_to_etfs(self):
+        with self._patch(self.QUOTES):
+            results = await search_etfs("nvidia", limit=10)
+
+        assert [r["symbol"] for r in results] == ["SMH"]
+
+
+class TestResolveStockSymbol:
+    def _patch(self, quotes):
+        mock_search = MagicMock()
+        mock_search.quotes = quotes
+        return patch("mcp_etf_holdings.fetcher.yf.Search", return_value=mock_search)
+
+    @pytest.mark.asyncio
+    async def test_returns_best_match(self):
+        quotes = [
+            {"quoteType": "EQUITY", "symbol": "NVDA", "longname": "NVIDIA Corporation"},
+            {"quoteType": "EQUITY", "symbol": "NVDX", "longname": "Other"},
+        ]
+        with self._patch(quotes):
+            match = await resolve_stock_symbol("Nvidia")
+
+        assert match["symbol"] == "NVDA"
+
+    @pytest.mark.asyncio
+    async def test_futures_are_not_a_valid_resolution(self):
+        with self._patch([{"quoteType": "FUTURE", "symbol": "NQ=F", "shortname": "x"}]):
+            assert await resolve_stock_symbol("nasdaq futures") is None
+
+    @pytest.mark.asyncio
+    async def test_no_match_returns_none(self):
+        with self._patch([]):
+            assert await resolve_stock_symbol("zzzznotreal") is None
+
+    @pytest.mark.asyncio
+    async def test_blank_query_returns_none_without_searching(self):
+        with patch("mcp_etf_holdings.fetcher.yf.Search") as search:
+            assert await resolve_stock_symbol("   ") is None
+        search.assert_not_called()
+
+
+class TestGetEtfInfos:
+    @pytest.mark.asyncio
+    async def test_preserves_input_order(self, mock_ticker_info):
+        def ticker_factory(symbol, session=None):
+            mock = MagicMock()
+            mock.info = dict(mock_ticker_info, longName=f"Fund {symbol}")
+            return mock
+
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", side_effect=ticker_factory):
+            results = await get_etf_infos(["VTI", "SPY", "QQQ"])
+
+        assert [r["ticker"] for r in results] == ["VTI", "SPY", "QQQ"]
+        assert results[0]["name"] == "Fund VTI"
+
+    @pytest.mark.asyncio
+    async def test_empty_list(self):
+        assert await get_etf_infos([]) == []
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_string_elements(self):
+        with pytest.raises(ValueError, match="list of strings"):
+            await get_etf_infos(["SPY", 42])
+
+
+class TestCacheTtlConfig:
+    """ETF_CACHE_TTL_SECONDS is read from the environment at import time."""
+
+    def test_default_is_24_hours(self):
+        with patch.dict(os.environ, {}, clear=True):
+            assert _get_cache_ttl() == 24 * 60 * 60
+
+    def test_valid_override(self):
+        with patch.dict(os.environ, {"ETF_CACHE_TTL_SECONDS": "300"}):
+            assert _get_cache_ttl() == 300.0
+
+    def test_non_numeric_is_rejected(self):
+        with patch.dict(os.environ, {"ETF_CACHE_TTL_SECONDS": "forever"}):
+            with pytest.raises(ValueError, match="must be a number"):
+                _get_cache_ttl()
+
+    def test_negative_is_rejected(self):
+        with patch.dict(os.environ, {"ETF_CACHE_TTL_SECONDS": "-1"}):
+            with pytest.raises(ValueError, match=">= 0"):
+                _get_cache_ttl()
+
+    def test_zero_disables_cache_with_a_warning(self, caplog):
+        with patch.dict(os.environ, {"ETF_CACHE_TTL_SECONDS": "0"}):
+            with caplog.at_level(logging.WARNING):
+                assert _get_cache_ttl() == 0.0
+        assert "Cache disabled" in caplog.text
+
+    def test_absurdly_long_ttl_warns_but_is_allowed(self, caplog):
+        eight_days = str(8 * 24 * 60 * 60)
+        with patch.dict(os.environ, {"ETF_CACHE_TTL_SECONDS": eight_days}):
+            with caplog.at_level(logging.WARNING):
+                assert _get_cache_ttl() == float(eight_days)
+        assert "Very long cache TTL" in caplog.text
+
+
+class TestNegativeCaching:
+    """A failing ticker is remembered briefly so a scan doesn't retry it 364x."""
+
+    def test_info_failure_is_not_refetched(self):
+        with patch(
+            "mcp_etf_holdings.fetcher.yf.Ticker", side_effect=Exception("boom")
+        ) as ticker:
+            first = _etf_info_sync("SPY")
+            second = _etf_info_sync("SPY")
+
+        assert first["name"] == "" and second["name"] == ""
+        assert ticker.call_count == 1  # second call served by the error cache
+
+    def test_holdings_failure_is_not_refetched(self):
+        with patch(
+            "mcp_etf_holdings.fetcher.yf.Ticker", side_effect=Exception("boom")
+        ) as ticker:
+            assert _etf_holdings_sync("SPY") == []
+            assert _etf_holdings_sync("SPY") == []
+
+        assert ticker.call_count == 1
+
+    def test_error_cache_is_per_ticker(self):
+        with patch(
+            "mcp_etf_holdings.fetcher.yf.Ticker", side_effect=Exception("boom")
+        ) as ticker:
+            _etf_holdings_sync("SPY")
+            _etf_holdings_sync("QQQ")
+
+        assert ticker.call_count == 2
+
+    def test_failed_info_returns_the_full_shape(self):
+        """Callers index these keys directly; a short dict would KeyError."""
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", side_effect=Exception("boom")):
+            result = _etf_info_sync("SPY")
+
+        assert set(result) == {
+            "ticker", "name", "category", "total_assets", "expense_ratio",
+            "yield", "ytd_return", "three_year_return", "five_year_return",
+            "nav_price", "currency",
+        }
+
+    def test_cached_error_shape_matches_fresh_error_shape(self):
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", side_effect=Exception("boom")):
+            fresh = _etf_info_sync("SPY")
+            cached = _etf_info_sync("SPY")
+
+        assert fresh == cached
+
+
+class TestHoldingsEdgeCases:
+    def test_non_numeric_weight_falls_back_to_zero(self):
+        df = pd.DataFrame({"Symbol": ["AAPL"], "Name": ["Apple"], "% Assets": ["n/a"]})
+        mock = MagicMock()
+        mock.funds_data.top_holdings = df
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock):
+            result = _etf_holdings_sync("SPY")
+
+        assert result[0]["weight_pct"] == 0.0
+
+    def test_weight_above_one_is_treated_as_already_percent(self):
+        df = pd.DataFrame({"Symbol": ["AAPL"], "Name": ["Apple"], "% Assets": [7.5]})
+        mock = MagicMock()
+        mock.funds_data.top_holdings = df
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock):
+            assert _etf_holdings_sync("SPY")[0]["weight_pct"] == 7.5
+
+    def test_weight_is_clamped_to_100(self):
+        df = pd.DataFrame({"Symbol": ["AAPL"], "Name": ["Apple"], "% Assets": [420.0]})
+        mock = MagicMock()
+        mock.funds_data.top_holdings = df
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock):
+            assert _etf_holdings_sync("SPY")[0]["weight_pct"] == 100.0
+
+    def test_missing_funds_data_caches_empty(self):
+        """Bond and commodity funds legitimately have none — cache, don't retry."""
+        mock = MagicMock()
+        mock.funds_data = None
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock) as ticker:
+            assert _etf_holdings_sync("BND") == []
+            assert _etf_holdings_sync("BND") == []
+
+        assert ticker.call_count == 1
+
+    def test_symbols_are_uppercased(self):
+        df = pd.DataFrame({"Symbol": ["aapl"], "Name": ["Apple"], "% Assets": [0.07]})
+        mock = MagicMock()
+        mock.funds_data.top_holdings = df
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock):
+            assert _etf_holdings_sync("SPY")[0]["symbol"] == "AAPL"
+
+
+class TestExpenseRatioNegativeValues:
+    def test_negative_expense_ratio_is_skipped(self):
+        """A negative fee is nonsense; fall through to the next field."""
+        info = {"netExpenseRatio": -1.0, "annualReportExpenseRatio": 0.0009}
+        assert _expense_ratio_fraction(info) == 0.0009
+
+    def test_all_negative_yields_none(self):
+        assert _expense_ratio_fraction({"netExpenseRatio": -1.0}) is None
+
+
+class TestSearchSymbolsValidation:
+    @pytest.mark.asyncio
+    async def test_limit_out_of_range_rejected(self):
+        with pytest.raises(ValueError, match="between 1 and 500"):
+            await search_symbols("test", limit=501)
+
+    def test_sync_limit_out_of_range_rejected(self):
+        with pytest.raises(ValueError, match="between 1 and 500"):
+            _search_symbols_sync("test", 0)
+
+    def test_sync_blank_query_rejected(self):
+        with pytest.raises(ValueError, match="non-empty string"):
+            _search_symbols_sync("   ", 10)
+
+
+class TestFindEtfsUniverseValidation:
+    @pytest.mark.asyncio
+    async def test_non_string_universe_elements_rejected(self):
+        with pytest.raises(ValueError, match="must be strings"):
+            await find_etfs_holding_stock("AAPL", etf_universe=["SPY", 42], limit=5)
+
+    @pytest.mark.asyncio
+    async def test_blank_stock_ticker_rejected(self):
+        with pytest.raises(ValueError, match="non-empty string"):
+            await find_etfs_holding_stock("   ", limit=5)
+
+    @pytest.mark.asyncio
+    async def test_duplicate_universe_entries_scanned_once(self, mock_ticker_with_info):
+        with patch(
+            "mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info
+        ):
+            results = await find_etfs_holding_stock(
+                "AAPL", etf_universe=["SPY", "SPY", "SPY"], limit=10
+            )
+
+        assert [r["etf"] for r in results] == ["SPY"]

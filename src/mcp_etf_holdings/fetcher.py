@@ -290,29 +290,40 @@ def _etf_holdings_sync(ticker: str) -> list[dict[str, Any]]:
         return []
 
 
-def _search_etfs_sync(query: str, limit: int) -> list[dict[str, Any]]:
+def _search_symbols_sync(
+    query: str, limit: int, quote_types: tuple[str, ...] | None = None
+) -> list[dict[str, Any]]:
+    """Search Yahoo for symbols, optionally restricted to given quote types.
+
+    `quote_types=None` returns everything Yahoo matched (equities, ETFs,
+    futures, indices…); pass e.g. ("ETF",) or ("EQUITY", "ETF") to filter.
+    """
     if not isinstance(query, str) or not query.strip():
         raise ValueError("Query must be a non-empty string")
     if not isinstance(limit, int) or limit < 1 or limit > 500:
         raise ValueError("Limit must be an integer between 1 and 500")
 
+    wanted = {t.upper() for t in quote_types} if quote_types else None
+
     try:
-        # Request extra results since non-ETF quotes get filtered out.
+        # Request extra results since unwanted quote types get filtered out.
         search = yf.Search(query, max_results=min(limit * 3, 50))
         quotes = search.quotes or []
-    except Exception as e:
+    except Exception:
         logger.exception("Search failed for query %s", query)
         return []
 
     results: list[dict[str, Any]] = []
     for q in quotes:
-        if str(q.get("quoteType", "")).upper() != "ETF":
+        quote_type = str(q.get("quoteType", "")).upper()
+        if wanted is not None and quote_type not in wanted:
             continue
         results.append(
             {
                 "symbol": q.get("symbol", ""),
                 "name": q.get("longname") or q.get("shortname", ""),
                 "exchange": q.get("exchDisp") or q.get("exchange", ""),
+                "type": quote_type,
             }
         )
         if len(results) >= limit:
@@ -376,7 +387,24 @@ async def get_etf_holdings(ticker: str) -> list[dict[str, Any]]:
         return await loop.run_in_executor(_executor, _etf_holdings_sync, ticker)
 
 
-async def search_etfs(query: str, *, limit: int = 10) -> list[dict[str, Any]]:
+async def get_etf_infos(tickers: list[str]) -> list[dict[str, Any]]:
+    """Fetch metadata for several tickers at once, preserving input order.
+
+    Concurrency is already bounded to 8 by the per-loop semaphore inside
+    `get_etf_info`; callers should still cap the list length.
+    """
+    if not isinstance(tickers, list) or not all(isinstance(t, str) for t in tickers):
+        raise ValueError("tickers must be a list of strings")
+
+    return list(await asyncio.gather(*(get_etf_info(t) for t in tickers)))
+
+
+async def search_symbols(
+    query: str,
+    *,
+    limit: int = 10,
+    quote_types: tuple[str, ...] | None = None,
+) -> list[dict[str, Any]]:
     if not isinstance(limit, int) or limit < 1 or limit > 500:
         raise ValueError("Limit must be between 1 and 500")
 
@@ -386,7 +414,35 @@ async def search_etfs(query: str, *, limit: int = 10) -> list[dict[str, Any]]:
         loop = asyncio.get_event_loop()
 
     async with _get_fetch_semaphore():
-        return await loop.run_in_executor(_executor, _search_etfs_sync, query, limit)
+        return await loop.run_in_executor(
+            _executor, _search_symbols_sync, query, limit, quote_types
+        )
+
+
+async def resolve_stock_symbol(query: str) -> dict[str, Any] | None:
+    """Resolve a company or fund name to its best-matching symbol.
+
+    Backs the fallback for users who type "Nvidia" where a ticker is expected.
+    Returns the top equity/ETF match, or None if nothing matched.
+    """
+    if not isinstance(query, str) or not query.strip():
+        return None
+
+    try:
+        results = await search_symbols(
+            query, limit=5, quote_types=("EQUITY", "ETF")
+        )
+    except ValueError:
+        return None
+
+    for r in results:
+        if r.get("symbol"):
+            return r
+    return None
+
+
+async def search_etfs(query: str, *, limit: int = 10) -> list[dict[str, Any]]:
+    return await search_symbols(query, limit=limit, quote_types=("ETF",))
 
 
 async def find_etfs_holding_stock(
