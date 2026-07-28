@@ -219,3 +219,6 @@ __marimo__/
 
 # uv lockfile — this is a published library, not an app; deps resolve from pyproject
 uv.lock
+
+# scratch output from the mcp-tool-smoke-test skill
+.claude/skills/mcp-tool-smoke-test/reports/
