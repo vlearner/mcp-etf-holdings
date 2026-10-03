@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Python dependencies declared in pyproject.toml / uv.lock
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      python-minor-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      # mcp 2.x renamed FastMCP -> MCPServer. Stay on 1.x until that migration
+      # is done deliberately (see CHANGELOG 0.4.0).
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
+
+  # Versions of the actions used in .github/workflows/
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
