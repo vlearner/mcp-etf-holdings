@@ -6,6 +6,15 @@ All notable changes to this project are recorded here.
 
 ## [0.4.0] — 2026-10-03
 
+### Fixed (release blockers)
+- A fresh install resolved `mcp` 2.x, which renamed `FastMCP` to `MCPServer`, so the server
+  failed to import (all CI jobs red; masked locally by `uv.lock` pinning 1.x). The
+  dependency is now `mcp>=1.0.0,<2` until the 2.x migration is done.
+- `etf_info` and `etf_holdings` strip surrounding whitespace, so a pasted `" voo "` works.
+- `compare_etfs` reports a malformed entry (e.g. a pasted fund name) as "No data returned"
+  instead of raising and discarding the rest of the comparison.
+
+
 ### Added
 - `compare_etfs(tickers)` — compares any number of ETFs (up to 10) in a single table
   instead of requiring one `etf_info` call per fund. Takes a real array parameter, so

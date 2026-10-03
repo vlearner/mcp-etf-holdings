@@ -31,6 +31,7 @@ from .fetcher import (
     get_etf_holdings,
     get_etf_info,
     get_etf_infos,
+    is_valid_ticker,
     resolve_stock_symbol,
     search_etfs as _search_etfs,
     search_symbols as _search_symbols,
@@ -156,6 +157,7 @@ async def etf_info(
 
     For two or more ETFs, use compare_etfs instead — it returns one table.
     """
+    ticker = ticker.strip()
     data = await get_etf_info(ticker)
     if not data.get("name"):
         return f"No data found for ticker '{ticker}'. Verify it is a valid ETF symbol."
@@ -208,11 +210,15 @@ async def compare_etfs(
     dropped = symbols[MAX_COMPARE:]
     symbols = symbols[:MAX_COMPARE]
 
-    infos = await get_etf_infos(symbols)
+    # Entries that aren't even ticker-shaped (a pasted fund name) are reported as
+    # missing rather than raising and discarding the rest of the comparison.
+    valid = [s for s in symbols if is_valid_ticker(s)]
+    info_by_symbol = dict(zip(valid, await get_etf_infos(valid)))
 
     rows: list[list[object]] = []
     missing: list[str] = []
-    for symbol, data in zip(symbols, infos):
+    for symbol in symbols:
+        data = info_by_symbol.get(symbol, {})
         if not data.get("name"):
             missing.append(symbol)
             rows.append([symbol] + [EMPTY] * 8)
@@ -261,6 +267,7 @@ async def etf_holdings(
     ticker: Annotated[str, Field(description="ETF ticker symbol, e.g. 'SPY'")],
 ) -> str:
     """Return the top holdings of an ETF with their portfolio weight percentages."""
+    ticker = ticker.strip()
     holdings = await get_etf_holdings(ticker)
     if not holdings:
         return (

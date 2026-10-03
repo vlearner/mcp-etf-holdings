@@ -87,6 +87,13 @@ class TestEtfInfoTool:
         assert "Large Cap Equities" in out
 
     @pytest.mark.asyncio
+    async def test_strips_pasted_whitespace(self, mock_ticker_with_info):
+        with _patch_ticker(mock_ticker_with_info):
+            out = await server.etf_info("  voo \n")
+
+        assert "**VOO**" in out
+
+    @pytest.mark.asyncio
     async def test_invalid_ticker_message(self, mock_ticker_no_info):
         with _patch_ticker(mock_ticker_no_info):
             out = await server.etf_info("NOTREAL")
@@ -308,6 +315,15 @@ class TestCompareEtfsTool:
         assert "| SPY |" in out and "| VTI |" in out
         assert "No data returned for: FAKE" in out
         assert "| FAKE | — |" in out
+
+    @pytest.mark.asyncio
+    async def test_compare_reports_malformed_entry_without_aborting(self, mock_ticker_with_info):
+        """A pasted fund name must not raise and discard the valid tickers."""
+        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+            out = await server.compare_etfs(["SPY", "VANGUARD S&P 500"])
+
+        assert "| SPY |" in out
+        assert "No data returned for: VANGUARD S&P 500" in out
 
     @pytest.mark.asyncio
     async def test_empty_list_is_rejected(self):
