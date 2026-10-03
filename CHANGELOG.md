@@ -4,6 +4,12 @@ All notable changes to this project are recorded here.
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-10-03
+
+### Added
+- `server.json` and an `mcp-name` marker in the README so the server can be listed in the
+  official MCP Registry (which VS Code's MCP gallery draws on). No code changes.
+
 ## [0.4.0] — 2026-10-03
 
 ### Fixed (release blockers)
