@@ -1,5 +1,7 @@
 # mcp-etf-holdings
 
+<!-- mcp-name: io.github.vlearner/mcp-etf-holdings -->
+
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 An MCP server for ETF data. Ask which funds hold a stock, compare fees, or pull top
