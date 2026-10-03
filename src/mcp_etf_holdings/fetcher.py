@@ -64,7 +64,7 @@ def _get_fetch_semaphore() -> asyncio.Semaphore:
 # Regex for valid ticker format
 _TICKER_PATTERN = re.compile(r"^[A-Z0-9.\-]{1,10}$")
 
-def _is_valid_ticker(ticker: str) -> bool:
+def is_valid_ticker(ticker: str) -> bool:
     return isinstance(ticker, str) and _TICKER_PATTERN.match(ticker.upper()) is not None
 
 
@@ -160,7 +160,7 @@ def _expense_ratio_fraction(info: dict[str, Any]) -> float | None:
 
 
 def _etf_info_sync(ticker: str) -> dict[str, Any]:
-    if not _is_valid_ticker(ticker):
+    if not is_valid_ticker(ticker):
         logger.warning("Invalid ticker format: %s", ticker)
         raise ValueError(f"Invalid ticker format: {ticker}")
 
@@ -224,7 +224,7 @@ def _etf_info_sync(ticker: str) -> dict[str, Any]:
 
 
 def _etf_holdings_sync(ticker: str) -> list[dict[str, Any]]:
-    if not _is_valid_ticker(ticker):
+    if not is_valid_ticker(ticker):
         logger.warning("Invalid ticker format: %s", ticker)
         raise ValueError(f"Invalid ticker format: {ticker}")
 
@@ -334,7 +334,7 @@ def _search_symbols_sync(
 def _find_etfs_holding_stock_sync(
     stock_ticker: str, etf_universe: list[str], limit: int
 ) -> list[dict[str, Any]]:
-    if not _is_valid_ticker(stock_ticker):
+    if not is_valid_ticker(stock_ticker):
         raise ValueError(f"Invalid stock ticker: {stock_ticker}")
 
     stock = stock_ticker.upper()
@@ -504,3 +504,7 @@ async def find_etfs_holding_stock(
 
     matches.sort(key=lambda x: x["weight_pct"], reverse=True)
     return matches[:limit]
+
+
+# Back-compat alias for the previous private name.
+_is_valid_ticker = is_valid_ticker
