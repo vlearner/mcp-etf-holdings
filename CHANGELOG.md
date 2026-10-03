@@ -4,6 +4,8 @@ All notable changes to this project are recorded here.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-10-03
+
 ### Added
 - `compare_etfs(tickers)` — compares any number of ETFs (up to 10) in a single table
   instead of requiring one `etf_info` call per fund. Takes a real array parameter, so

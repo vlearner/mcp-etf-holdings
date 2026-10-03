@@ -5,11 +5,6 @@
 An MCP server for ETF data. Ask which funds hold a stock, compare fees, or pull top
 holdings. Data comes live from Yahoo Finance. No API key.
 
-<!-- PYPI-PENDING-BANNER: delete this block in the release commit once 0.3.0 is on PyPI -->
-> ⏳ **Pending first PyPI release.** The `uvx` / `pip install` commands below are the
-> intended install path but won't resolve until 0.3.0 is published. Until then, use
-> [From source](#from-source).
-
 ---
 
 ## What you can ask
