@@ -19,3 +19,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # One PR for all action bumps. upload-artifact and download-artifact must move
+    # together, and these workflows can't all be exercised by PR checks.
+    groups:
+      github-actions:
+        patterns: ["*"]
