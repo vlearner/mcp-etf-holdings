@@ -651,9 +651,37 @@ class TestDefensiveValidationPaths:
 class TestEntryPoint:
     def test_main_runs_the_server_over_stdio(self):
         with patch.object(server.mcp, "run") as run:
-            server.main()
+            server.main([])
 
         run.assert_called_once_with(transport="stdio")
+
+    def test_http_flag_runs_streamable_http_on_loopback(self):
+        with patch.object(server.mcp, "run") as run:
+            server.main(["--transport", "http", "--port", "9123"])
+
+        run.assert_called_once_with(transport="streamable-http")
+        assert server.mcp.settings.host == "127.0.0.1"
+        assert server.mcp.settings.port == 9123
+
+    def test_http_on_a_public_host_warns(self, capsys):
+        with patch.object(server.mcp, "run"):
+            server.main(["--transport", "http", "--host", "0.0.0.0"])
+
+        assert "no authentication" in capsys.readouterr().err
+
+    def test_bad_port_in_environment_is_a_clean_usage_error(self, monkeypatch, capsys):
+        monkeypatch.setenv("MCP_PORT", "abc")
+        with pytest.raises(SystemExit):
+            server.main(["--transport", "http"])
+
+        assert "invalid int value" in capsys.readouterr().err
+
+    def test_transport_can_come_from_the_environment(self, monkeypatch):
+        monkeypatch.setenv("MCP_TRANSPORT", "http")
+        with patch.object(server.mcp, "run") as run:
+            server.main([])
+
+        run.assert_called_once_with(transport="streamable-http")
 
     def test_version_is_exposed(self):
         from mcp_etf_holdings import __version__
