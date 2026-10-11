@@ -1,0 +1,13 @@
+.git
+.venv
+.idea
+.vscode
+.claude
+.github
+.pytest_cache
+**/__pycache__
+tests
+dist
+build
+*.egg-info
+.DS_Store

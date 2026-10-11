@@ -303,6 +303,19 @@ Point a client at it with `{ "type": "http", "url": "http://127.0.0.1:8000/mcp" 
 It binds to loopback by default and has **no authentication**. Binding elsewhere prints a
 warning; put an authenticating proxy in front before exposing it beyond your machine.
 
+#### Try it in Docker
+
+A sample [Dockerfile](Dockerfile) builds the server from this checkout:
+
+```bash
+docker build -t mcp-etf-holdings .
+docker run --rm -p 127.0.0.1:8000:8000 mcp-etf-holdings
+```
+
+Keep the `127.0.0.1:` in the port mapping: it is what stops the container from being
+reachable by other machines on your network. The server logs a no-authentication warning
+inside the container; that is expected. This is for trying the feature, not a hosting recipe.
+
 ### Tests
 
 ```bash
