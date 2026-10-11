@@ -287,6 +287,22 @@ To poke at the protocol by hand:
 npx @modelcontextprotocol/inspector uv run mcp-etf-holdings
 ```
 
+### HTTP transport (optional)
+
+stdio is the default and what every editor config above uses. To serve over streamable HTTP
+instead:
+
+```bash
+uv run mcp-etf-holdings --transport http            # http://127.0.0.1:8000/mcp
+uv run mcp-etf-holdings --transport http --port 9000
+```
+
+Point a client at it with `{ "type": "http", "url": "http://127.0.0.1:8000/mcp" }`
+(VS Code, under `servers`). `MCP_TRANSPORT`, `MCP_HOST` and `MCP_PORT` set the same options.
+
+It binds to loopback by default and has **no authentication**. Binding elsewhere prints a
+warning; put an authenticating proxy in front before exposing it beyond your machine.
+
 ### Tests
 
 ```bash

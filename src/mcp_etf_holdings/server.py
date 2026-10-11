@@ -20,7 +20,10 @@ Or via the installed script:
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
+import sys
 from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
@@ -550,8 +553,47 @@ register_prompts(mcp)
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    mcp.run(transport="stdio")
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="mcp-etf-holdings",
+        description="ETF holdings MCP server. Speaks stdio unless told otherwise.",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "http"],
+        default=os.environ.get("MCP_TRANSPORT", "stdio"),
+        help="stdio (default) or http (streamable HTTP at /mcp)",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("MCP_HOST", "127.0.0.1"),
+        help="HTTP bind address (default 127.0.0.1; there is no authentication)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=os.environ.get("MCP_PORT", "8000"),  # argparse applies type=int
+        help="HTTP port (default 8000)",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
+    if args.transport == "http":
+        # The server has no authentication, so anything but loopback exposes
+        # Yahoo-backed tools to the network. Allow it, but say so loudly.
+        if args.host not in ("127.0.0.1", "localhost", "::1"):
+            print(
+                f"WARNING: binding to {args.host} with no authentication; "
+                "put an authenticating proxy in front of this.",
+                file=sys.stderr,
+            )
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+        mcp.run(transport="streamable-http")
+    else:
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":
