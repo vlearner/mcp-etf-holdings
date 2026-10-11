@@ -4,6 +4,22 @@ All notable changes to this project are recorded here.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-10-11
+
+### Added
+- Opt-in streamable HTTP transport: `mcp-etf-holdings --transport http` (or
+  `MCP_TRANSPORT=http`) serves the same tools at `/mcp`. `--host`/`--port` (or
+  `MCP_HOST`/`MCP_PORT`) configure the bind. stdio remains the default, so existing
+  editor configs are unchanged.
+- HTTP binds to `127.0.0.1` by default and has no authentication; a non-loopback
+  `--host` prints a warning. The SDK's Host/Origin checks stay on.
+- Sample `Dockerfile` for trying the HTTP transport (publish the port to loopback only).
+- The release workflow now publishes to the MCP Registry after PyPI succeeds.
+
+### Changed
+- Minimum `mcp` is now 1.23.0 (was 1.0.0). Streamable HTTP needs 1.8.0, and the
+  Host/Origin protection the HTTP path relies on only enables on loopback from 1.23.0.
+
 ## [0.4.1] — 2026-10-03
 
 ### Added
