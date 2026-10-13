@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-etf-holdings</title>
+<meta name="description" content="An MCP server for ETF data. Ask which funds hold a stock, compare fees, or pull top holdings. Live Yahoo Finance data, no API key.">
+<style>
+  :root {
+    --bg: #fafaf7;
+    --surface: #ffffff;
+    --text: #1c1d1f;
+    --muted: #5e6166;
+    --border: #e3e2dc;
+    --accent: #0b6e4f;
+    --accent-text: #ffffff;
+    --code-bg: #f1f0ea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141513;
+      --surface: #1c1e1b;
+      --text: #ecece6;
+      --muted: #9a9d96;
+      --border: #2e312c;
+      --accent: #4cc38a;
+      --accent-text: #0e1410;
+      --code-bg: #232622;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 16px 64px; }
+  header { padding: 56px 0 24px; }
+  h1 { font-size: 2rem; margin: 0 0 8px; letter-spacing: -0.02em; }
+  h2 { font-size: 1.25rem; margin: 48px 0 12px; }
+  p { margin: 0 0 12px; }
+  .lede { font-size: 1.15rem; color: var(--muted); max-width: 60ch; }
+  a { color: var(--accent); }
+  .links { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 20px; font-size: 0.95rem; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.875rem; }
+  code { background: var(--code-bg); padding: 1px 6px; border-radius: 4px; }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 76px 14px 16px; /* right gap keeps text clear of the Copy button */
+    margin: 0;
+    overflow-x: auto;
+  }
+  pre code { background: none; padding: 0; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .tab {
+    font: inherit; font-size: 0.9rem;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .tab[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .tab:focus-visible, .copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .panel[hidden] { display: none; }
+  .snippet { position: relative; }
+  .copy {
+    position: absolute; top: 8px; right: 8px;
+    font: inherit; font-size: 0.8rem;
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .note { color: var(--muted); font-size: 0.9rem; margin-top: 10px; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  th { color: var(--muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  td:first-child { min-width: 14em; }
+  blockquote {
+    margin: 0 0 10px; padding: 10px 14px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: 3px solid var(--accent); border-radius: 6px;
+  }
+  ul { padding-left: 1.2em; margin: 0 0 12px; }
+  li { margin-bottom: 6px; }
+  footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.875rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>mcp-etf-holdings</h1>
+  <p class="lede">An MCP server for ETF data. Ask which funds hold a stock, compare fees, or pull top holdings. Data comes live from Yahoo Finance. No API key.</p>
+  <div class="links">
+    <a href="https://github.com/vlearner/mcp-etf-holdings">GitHub</a>
+    <a href="https://pypi.org/project/mcp-etf-holdings/">PyPI</a>
+    <a href="https://github.com/vlearner/mcp-etf-holdings/blob/main/CHANGELOG.md">Changelog</a>
+    <a href="https://github.com/vlearner/mcp-etf-holdings/issues">Issues</a>
+  </div>
+</header>
+
+<main>
+
+<h2>Install</h2>
+<p>Nothing to install first. Each config launches the server on demand with <a href="https://docs.astral.sh/uv/">uv</a> (<code>uvx</code>), in its own isolated environment. Needs Python 3.11+.</p>
+
+<div class="tabs" role="tablist" aria-label="Client">
+  <button class="tab" role="tab" id="t-code" aria-controls="p-code" aria-selected="true">Claude Code</button>
+  <button class="tab" role="tab" id="t-desktop" aria-controls="p-desktop" aria-selected="false">Claude Desktop</button>
+  <button class="tab" role="tab" id="t-vscode" aria-controls="p-vscode" aria-selected="false">VS Code</button>
+  <button class="tab" role="tab" id="t-cursor" aria-controls="p-cursor" aria-selected="false">Cursor</button>
+</div>
+
+<div class="panel" role="tabpanel" id="p-code" aria-labelledby="t-code">
+  <div class="snippet">
+    <pre><code>claude mcp add etf-holdings -- uvx mcp-etf-holdings</code></pre>
+    <button class="copy" type="button">Copy</button>
+  </div>
+</div>
+
+<div class="panel" role="tabpanel" id="p-desktop" aria-labelledby="t-desktop" hidden>
+  <div class="snippet">
+    <pre><code>{
+  "mcpServers": {
+    "etf-holdings": {
+      "command": "uvx",
+      "args": ["mcp-etf-holdings"]
+    }
+  }
+}</code></pre>
+    <button class="copy" type="button">Copy</button>
+  </div>
+  <p class="note">Add to <code>claude_desktop_config.json</code> (macOS: <code>~/Library/Application Support/Claude/</code>, Windows: <code>%APPDATA%\Claude\</code>), then fully quit and reopen Claude Desktop.</p>
+</div>
+
+<div class="panel" role="tabpanel" id="p-vscode" aria-labelledby="t-vscode" hidden>
+  <div class="snippet">
+    <pre><code>{
+  "servers": {
+    "etf-holdings": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["mcp-etf-holdings"]
+    }
+  }
+}</code></pre>
+    <button class="copy" type="button">Copy</button>
+  </div>
+  <p class="note">Save as <code>.vscode/mcp.json</code>, or run <strong>MCP: Open User Configuration</strong> for a global setup. VS Code uses the key <code>servers</code>, not <code>mcpServers</code>.</p>
+</div>
+
+<div class="panel" role="tabpanel" id="p-cursor" aria-labelledby="t-cursor" hidden>
+  <div class="snippet">
+    <pre><code>{
+  "mcpServers": {
+    "etf-holdings": {
+      "command": "uvx",
+      "args": ["mcp-etf-holdings"]
+    }
+  }
+}</code></pre>
+    <button class="copy" type="button">Copy</button>
+  </div>
+  <p class="note">Save as <code>.cursor/mcp.json</code> for one project, or <code>~/.cursor/mcp.json</code> for all of them. Restart Cursor.</p>
+</div>
+
+<h2>What you can ask</h2>
+<p>Search by company name or ticker. "Which ETFs hold Nvidia?" works the same as "Which ETFs hold NVDA?".</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Ask</th><th>Tool</th></tr></thead>
+  <tbody>
+    <tr><td>Which ETFs hold NVDA?</td><td><code>find_etfs_holding_stock</code></td></tr>
+    <tr><td>What's the cheapest ETF for Nvidia exposure?</td><td><code>stock_exposure_summary</code></td></tr>
+    <tr><td>Compare SPY, VOO, QQQ and SCHD</td><td><code>compare_etfs</code></td></tr>
+    <tr><td>What are SPY's top holdings?</td><td><code>etf_holdings</code></td></tr>
+    <tr><td>What is QQQ's expense ratio and AUM?</td><td><code>etf_info</code></td></tr>
+    <tr><td>Find me semiconductor ETFs</td><td><code>search_etfs</code></td></tr>
+    <tr><td>What's the ticker for Berkshire Hathaway?</td><td><code>lookup_symbol</code></td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Try these</h2>
+<blockquote>Compare SPY, VOO, IVV and SPLG. They all track the S&amp;P 500, so which is cheapest?</blockquote>
+<blockquote>I own VOO, QQQ and VGT. Am I doubling up?</blockquote>
+<blockquote>Find semiconductor ETFs and compare the three biggest.</blockquote>
+<p class="note">There are also five prompt templates (<code>etf_deep_dive</code>, <code>compare_funds</code>, <code>stock_exposure</code>, <code>portfolio_checkup</code>, <code>theme_explorer</code>) that show up as slash-commands in Claude Desktop and Claude Code.</p>
+
+<h2>Optional: HTTP</h2>
+<p>stdio is the default and what every config above uses. To serve over streamable HTTP instead:</p>
+<div class="snippet">
+  <pre><code>uvx mcp-etf-holdings --transport http   # http://127.0.0.1:8000/mcp</code></pre>
+  <button class="copy" type="button">Copy</button>
+</div>
+<p class="note">It binds to loopback and has no authentication. Don't expose it beyond your own machine without an authenticating proxy. See the <a href="https://github.com/vlearner/mcp-etf-holdings#http-transport-optional">README</a> for the details and a Docker example.</p>
+
+<h2>Know the limits</h2>
+<ul>
+  <li>Only the top ~10 to 15 positions per ETF are published, so anything derived from holdings (reverse lookups, exposure, overlap) is a floor, not the full picture.</li>
+  <li>The default search covers about 365 funds. A stock held only in small or niche ETFs may not turn up.</li>
+  <li>Responses are cached for 24 hours. Yahoo's terms and rate limits apply.</li>
+</ul>
+
+</main>
+
+<footer>
+  <p>MIT licensed. Not affiliated with Yahoo Finance, yfinance, or any financial institution. This is not financial advice.</p>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  var tabs = document.querySelectorAll('.tab');
+  function select(tab) {
+    tabs.forEach(function (t) {
+      var on = t === tab;
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+    });
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener('click', function () { select(t); });
+    t.addEventListener('keydown', function (e) {
+      var next = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : null;
+      if (next === null) return;
+      var target = tabs[(next + tabs.length) % tabs.length];
+      select(target); target.focus();
+    });
+  });
+  document.querySelectorAll('.copy').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var text = btn.parentNode.querySelector('code').textContent;
+      var done = function (label) { btn.textContent = label; setTimeout(function () { btn.textContent = 'Copy'; }, 1500); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { done('Copied'); }, function () { done('Press ⌘C'); });
+      } else { done('Press ⌘C'); }
+    });
+  });
+})();
+</script>
+</body>
+</html>
