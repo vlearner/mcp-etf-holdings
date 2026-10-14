@@ -5,7 +5,8 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 An MCP server for ETF data. Ask which funds hold a stock, compare fees, or pull top
-holdings. Data comes live from Yahoo Finance. No API key.
+holdings. Data comes live from Yahoo Finance by default, with no API key, or from your own
+data source through a [custom provider](#custom-data-providers).
 
 ---
 
@@ -173,6 +174,23 @@ slash-commands, so you don't have to write the prompt yourself.
 
 Tools that return more than one row format the result as a markdown table.
 
+Every tool returns the markdown text **and** a JSON object in the MCP result's
+`structuredContent`, so programs can use the data without parsing tables. The JSON always
+has a `source` field naming the data provider. When a tool has nothing to report (bad
+input, no data) it also sets `message`.
+
+| Tool | Structured fields |
+|---|---|
+| `etf_info` | `found`, `etf` (ticker, name, category, total_assets, expense_ratio, yield, ytd_return, three_year_return, five_year_return, nav_price, currency) |
+| `compare_etfs` | `etfs` (same shape as above), `missing`, `omitted` |
+| `etf_holdings` | `ticker`, `holdings` (rank, symbol, name, weight_pct) |
+| `find_etfs_holding_stock` | `stock`, `interpreted_from`, `searched`, `matches` (etf, weight_pct, rank_in_etf) |
+| `stock_exposure_summary` | same as above, with name, expense_ratio and total_assets added to each match |
+| `search_etfs`, `lookup_symbol` | `query`, `results` (symbol, name, exchange, and `type` for lookups) |
+
+Values are raw numbers, not display strings: `expense_ratio` and `yield` are fractions
+(`0.0003` is 0.03%), `weight_pct` is a percent (`7.5` is 7.5%).
+
 ### `etf_info(ticker)`
 
 Metadata for one ETF. For two or more funds, use `compare_etfs`.
@@ -337,10 +355,13 @@ uv run pytest -q --cov=mcp_etf_holdings --cov-report=term-missing
 src/mcp_etf_holdings/
   server.py       ← FastMCP entry point, 7 tools
   prompts.py      ← prompt templates, exposed as client slash-commands
-  fetcher.py      ← async wrappers around yfinance + 24h TTL cache
+  providers.py    ← data-provider interface, Yahoo Finance default, provider loading
+  fetcher.py      ← validation, 24h TTL cache and concurrency around the provider
+  results.py      ← tool results: markdown text plus structured JSON
   formatting.py   ← markdown tables and shared number formatting
   top_etfs.py     ← ~365 ETF tickers scanned for reverse lookups
   __main__.py     ← enables `python -m mcp_etf_holdings`
+examples/         ← sample custom data provider
 tests/            ← pytest suite, fully offline
 .vscode/mcp.json  ← VS Code config pointing at the working tree
 pyproject.toml
@@ -360,6 +381,80 @@ Dependencies: `mcp` (protocol SDK), `yfinance` (data), `pandas` (holdings frames
 | Works in a terminal, not in the editor | GUI apps often don't inherit your shell `PATH`. Use an absolute path to `uvx` — run `which uvx` to get it. |
 | Tool calls return "No data found" | Check the symbol is real. Yahoo rate-limits sometimes, so wait and retry. |
 | Python version error on install | Needs 3.11+. Check with `python3 --version`. |
+
+---
+
+## Custom data providers
+
+By default the server reads Yahoo Finance. To serve the same tools from your own data
+source — an internal market-data API, a licensed vendor feed, a database — write a small
+provider class and point the server at it:
+
+```bash
+ETF_DATA_PROVIDER=my_company_data:MyProvider uvx --with my-company-data mcp-etf-holdings
+```
+
+`ETF_DATA_PROVIDER` takes one of:
+
+- `yfinance` — the default
+- `package.module:Name` — a class (called with no arguments), a zero-argument factory, or
+  an instance
+- a name registered under the `mcp_etf_holdings.providers` entry-point group, for
+  providers shipped as a package
+
+The package must be installed in the same environment as the server. A bad value stops
+the server at startup with a clear message. The active provider is printed to stderr at
+launch and returned as `source` in every tool result.
+
+### What a provider implements
+
+```python
+class MyProvider:
+    name = "Acme Market Data"          # shown to users and returned as `source`
+
+    def get_info(self, ticker: str) -> dict: ...
+    def get_holdings(self, ticker: str) -> list[dict]: ...
+
+    # optional
+    def search(self, query: str, limit: int, quote_types: tuple[str, ...] | None) -> list[dict]: ...
+    default_universe = ["SPY", "QQQ", ...]
+```
+
+Methods may be plain or `async def`. Raise on failure and return empty results for "no
+data". Everything else is handled for you: ticker validation, caching (including a short
+negative cache after a failure), the concurrency limit, and clamping and cleanup of the
+shapes below.
+
+| Method | Returns |
+|---|---|
+| `get_info(ticker)` | dict with any of `name`, `category`, `total_assets`, `expense_ratio`, `yield`, `ytd_return`, `three_year_return`, `five_year_return`, `nav_price`, `currency`. Missing keys are filled with empty values; an empty `name` means "no data". |
+| `get_holdings(ticker)` | list of `{"symbol", "name", "weight_pct"}`, largest first. |
+| `search(query, limit, quote_types)` | list of `{"symbol", "name", "exchange", "type"}`, where `type` is `"EQUITY"` or `"ETF"`. `quote_types` is `None` or a tuple to filter by. |
+| `default_universe` | ETFs the reverse-lookup tools scan. Without it the built-in US list is used. |
+
+Units matter, because they are not guessed:
+
+- `expense_ratio` and `yield` are **fractions**: `0.0003` means 0.03%.
+- `weight_pct` is a **percent**: `0.5` means 0.5%, not 50%.
+- `ytd_return` and the multi-year returns are fractions (`0.12` is 12%).
+
+Without `search`, `lookup_symbol` and `search_etfs` tell the user that name search isn't
+available, and the tools that accept a company name only accept tickers. Every other tool
+works unchanged.
+
+[`examples/rest_provider.py`](examples/rest_provider.py) is a complete provider backed by
+a REST API, to copy from.
+
+### Notes for deployments
+
+- The provider code runs with the server's permissions. Only point `ETF_DATA_PROVIDER`
+  at code you trust, as you would any command the server launches.
+- Keep credentials in environment variables, not in the MCP config file.
+- Responses are cached for `ETF_CACHE_TTL_SECONDS` (default 24 hours). Lower it, or set
+  it to `0`, if your data changes intraday.
+- Providers are called from worker threads and up to 8 calls can run at once, so shared
+  clients and sessions must be thread-safe.
+- The Yahoo terms and rate limits in [Limits](#limits) apply only to the default provider.
 
 ---
 

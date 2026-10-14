@@ -4,6 +4,24 @@ All notable changes to this project are recorded here.
 
 ## [Unreleased]
 
+### Added
+- Pluggable data providers. Set `ETF_DATA_PROVIDER` to `package.module:Name` (or a
+  registered entry-point name) to serve every tool from your own data source instead of
+  Yahoo Finance. Providers implement `get_info` and `get_holdings`, plus optional `search`
+  and `default_universe`, and may be sync or async. See "Custom data providers" in the
+  README and `examples/rest_provider.py`. Yahoo Finance remains the default and behaves as
+  before.
+- Every tool now returns structured JSON (`structuredContent`) alongside the existing
+  markdown text, always including `source`, the name of the data provider.
+- A misconfigured provider stops the server at startup with a clear message.
+
+### Changed
+- Without a provider `search`, `lookup_symbol` and `search_etfs` say that name search is
+  unavailable, instead of returning no results.
+- Tool functions now return `CallToolResult` instead of `str`. Clients over MCP see the
+  same text; code that imports and calls the tool functions directly should read
+  `.content[0].text`.
+
 ## [0.5.0] — 2026-10-11
 
 ### Added

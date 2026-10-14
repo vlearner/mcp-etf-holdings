@@ -13,6 +13,11 @@ from mcp_etf_holdings.fetcher import _info_cache, _holdings_cache
 from mcp_etf_holdings.top_etfs import TOP_ETFS
 
 
+def text(result):
+    """The markdown half of a tool result."""
+    return result.content[0].text
+
+
 @pytest.fixture(autouse=True)
 def clear_caches():
     _info_cache.clear()
@@ -23,13 +28,13 @@ def clear_caches():
 
 
 def _patch_ticker(mock_ticker):
-    return patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker)
+    return patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker)
 
 
 def _patch_search(quotes):
     mock_search = MagicMock()
     mock_search.quotes = quotes
-    return patch("mcp_etf_holdings.fetcher.yf.Search", return_value=mock_search)
+    return patch("mcp_etf_holdings.providers.yf.Search", return_value=mock_search)
 
 
 class TestToolRegistration:
@@ -79,7 +84,7 @@ class TestEtfInfoTool:
     @pytest.mark.asyncio
     async def test_formats_metadata(self, mock_ticker_with_info):
         with _patch_ticker(mock_ticker_with_info):
-            out = await server.etf_info("SPY")
+            out = text(await server.etf_info("SPY"))
 
         assert "**SPY** – SPDR S&P 500 ETF Trust" in out
         assert "$500.00B" in out
@@ -89,14 +94,14 @@ class TestEtfInfoTool:
     @pytest.mark.asyncio
     async def test_strips_pasted_whitespace(self, mock_ticker_with_info):
         with _patch_ticker(mock_ticker_with_info):
-            out = await server.etf_info("  voo \n")
+            out = text(await server.etf_info("  voo \n"))
 
         assert "**VOO**" in out
 
     @pytest.mark.asyncio
     async def test_invalid_ticker_message(self, mock_ticker_no_info):
         with _patch_ticker(mock_ticker_no_info):
-            out = await server.etf_info("NOTREAL")
+            out = text(await server.etf_info("NOTREAL"))
 
         assert "No data found for ticker 'NOTREAL'" in out
 
@@ -106,7 +111,7 @@ class TestEtfInfoTool:
         mock_ticker = MagicMock()
         mock_ticker.info = {"longName": "Invesco QQQ Trust", "netExpenseRatio": 0.18}
         with _patch_ticker(mock_ticker):
-            out = await server.etf_info("QQQ")
+            out = text(await server.etf_info("QQQ"))
 
         assert "Expense ratio : 0.18%" in out
         assert "18.00%" not in out
@@ -116,7 +121,7 @@ class TestEtfInfoTool:
         mock_ticker = MagicMock()
         mock_ticker.info = {"longName": "Mystery Fund"}
         with _patch_ticker(mock_ticker):
-            out = await server.etf_info("MYST")
+            out = text(await server.etf_info("MYST"))
 
         assert "Expense ratio : N/A" in out
 
@@ -131,7 +136,7 @@ class TestEtfInfoTool:
             "ytdReturn": 0.0,
         }
         with _patch_ticker(mock_ticker):
-            out = await server.etf_info("ZERO")
+            out = text(await server.etf_info("ZERO"))
 
         assert "Expense ratio : 0.00%" in out
         assert "Dividend yield: 0.00%" in out
@@ -142,7 +147,7 @@ class TestEtfInfoTool:
         mock_ticker = MagicMock()
         mock_ticker.info = {"longName": "Small ETF", "totalAssets": 250_000_000}
         with _patch_ticker(mock_ticker):
-            out = await server.etf_info("SML")
+            out = text(await server.etf_info("SML"))
 
         assert "$250.0M" in out
 
@@ -151,7 +156,7 @@ class TestEtfHoldingsTool:
     @pytest.mark.asyncio
     async def test_formats_holdings_list(self, mock_ticker_with_info):
         with _patch_ticker(mock_ticker_with_info):
-            out = await server.etf_holdings("spy")
+            out = text(await server.etf_holdings("spy"))
 
         assert "Top holdings of **SPY**" in out
         assert "AAPL" in out and "Apple Inc." in out
@@ -160,7 +165,7 @@ class TestEtfHoldingsTool:
     @pytest.mark.asyncio
     async def test_no_holdings_message(self, mock_ticker_no_holdings):
         with _patch_ticker(mock_ticker_no_holdings):
-            out = await server.etf_holdings("XYZ")
+            out = text(await server.etf_holdings("XYZ"))
 
         assert "No holdings data found for 'XYZ'" in out
 
@@ -169,9 +174,9 @@ class TestFindEtfsHoldingStockTool:
     @pytest.mark.asyncio
     async def test_finds_stock_in_custom_universe(self, mock_ticker_with_info):
         with _patch_ticker(mock_ticker_with_info):
-            out = await server.find_etfs_holding_stock(
+            out = text(await server.find_etfs_holding_stock(
                 "AAPL", custom_etf_universe='["SPY", "QQQ"]'
-            )
+            ))
 
         assert "**AAPL** appears in the top holdings" in out
         assert "searched 2" in out
@@ -180,9 +185,9 @@ class TestFindEtfsHoldingStockTool:
     @pytest.mark.asyncio
     async def test_not_found_message_mentions_universe_size(self, mock_ticker_with_info):
         with _patch_ticker(mock_ticker_with_info):
-            out = await server.find_etfs_holding_stock(
+            out = text(await server.find_etfs_holding_stock(
                 "NOTHELD", custom_etf_universe='["SPY"]'
-            )
+            ))
 
         assert "'NOTHELD' was not found" in out
         assert "among the 1 ETFs searched" in out
@@ -190,27 +195,27 @@ class TestFindEtfsHoldingStockTool:
     @pytest.mark.asyncio
     async def test_default_universe_size_in_message(self, mock_ticker_no_holdings):
         with _patch_ticker(mock_ticker_no_holdings):
-            out = await server.find_etfs_holding_stock("AAPL")
+            out = text(await server.find_etfs_holding_stock("AAPL"))
 
         assert f"among the {len(TOP_ETFS)} ETFs searched" in out
 
     @pytest.mark.asyncio
     async def test_invalid_json_universe(self):
-        out = await server.find_etfs_holding_stock("AAPL", custom_etf_universe="not json")
+        out = text(await server.find_etfs_holding_stock("AAPL", custom_etf_universe="not json"))
         assert "Invalid JSON" in out
 
     @pytest.mark.asyncio
     async def test_non_array_json_universe(self):
-        out = await server.find_etfs_holding_stock("AAPL", custom_etf_universe='{"a": 1}')
+        out = text(await server.find_etfs_holding_stock("AAPL", custom_etf_universe='{"a": 1}'))
         assert "must be a JSON array" in out
 
     @pytest.mark.asyncio
     async def test_limit_is_clamped(self, mock_ticker_with_info):
         # limit=0 must clamp to 1, not error or return nothing
         with _patch_ticker(mock_ticker_with_info):
-            out = await server.find_etfs_holding_stock(
+            out = text(await server.find_etfs_holding_stock(
                 "AAPL", limit=0, custom_etf_universe='["SPY", "QQQ"]'
-            )
+            ))
 
         assert "1 ETF(s)" in out
 
@@ -226,7 +231,7 @@ class TestSearchEtfsTool:
     @pytest.mark.asyncio
     async def test_returns_only_etfs(self):
         with _patch_search(self.SAMPLE_QUOTES):
-            out = await server.search_etfs("semiconductor")
+            out = text(await server.search_etfs("semiconductor"))
 
         assert "SOXX" in out and "SMH" in out
         assert "TSM" not in out and "SOX=F" not in out
@@ -234,7 +239,7 @@ class TestSearchEtfsTool:
     @pytest.mark.asyncio
     async def test_formats_name_and_exchange(self):
         with _patch_search(self.SAMPLE_QUOTES):
-            out = await server.search_etfs("semiconductor")
+            out = text(await server.search_etfs("semiconductor"))
 
         assert "iShares Semiconductor ETF" in out
         assert "NASDAQ" in out
@@ -242,7 +247,7 @@ class TestSearchEtfsTool:
     @pytest.mark.asyncio
     async def test_respects_limit(self):
         with _patch_search(self.SAMPLE_QUOTES):
-            out = await server.search_etfs("semiconductor", limit=1)
+            out = text(await server.search_etfs("semiconductor", limit=1))
 
         assert "SOXX" in out
         assert "SMH" not in out
@@ -250,22 +255,22 @@ class TestSearchEtfsTool:
     @pytest.mark.asyncio
     async def test_no_results_message(self):
         with _patch_search([]):
-            out = await server.search_etfs("zzzznotreal")
+            out = text(await server.search_etfs("zzzznotreal"))
 
         assert "No ETFs found matching 'zzzznotreal'" in out
 
     @pytest.mark.asyncio
     async def test_blank_query_rejected(self):
-        out = await server.search_etfs("   ")
+        out = text(await server.search_etfs("   "))
         assert "non-empty search query" in out
 
     @pytest.mark.asyncio
     async def test_search_exception_returns_no_results(self):
         with patch(
-            "mcp_etf_holdings.fetcher.yf.Search",
+            "mcp_etf_holdings.providers.yf.Search",
             side_effect=Exception("network down"),
         ):
-            out = await server.search_etfs("semiconductor")
+            out = text(await server.search_etfs("semiconductor"))
 
         assert "No ETFs found" in out
 
@@ -274,7 +279,7 @@ class TestCompareEtfsTool:
     @pytest.mark.asyncio
     async def test_renders_one_row_per_ticker(self, mock_ticker_with_info):
         with _patch_ticker(mock_ticker_with_info):
-            out = await server.compare_etfs(["SPY", "QQQ", "VTI"])
+            out = text(await server.compare_etfs(["SPY", "QQQ", "VTI"]))
 
         assert "| Ticker | Name | Category | AUM |" in out
         # header + separator + 3 data rows
@@ -285,7 +290,7 @@ class TestCompareEtfsTool:
     @pytest.mark.asyncio
     async def test_deduplicates_and_uppercases(self, mock_ticker_with_info):
         with _patch_ticker(mock_ticker_with_info):
-            out = await server.compare_etfs(["spy", "SPY", " spy "])
+            out = text(await server.compare_etfs(["spy", "SPY", " spy "]))
 
         assert "Comparing 1 ETF(s)" in out
         assert out.count("| SPY |") == 1
@@ -294,7 +299,7 @@ class TestCompareEtfsTool:
     async def test_caps_at_max_compare(self, mock_ticker_with_info):
         tickers = [f"ETF{i}" for i in range(server.MAX_COMPARE + 3)]
         with _patch_ticker(mock_ticker_with_info):
-            out = await server.compare_etfs(tickers)
+            out = text(await server.compare_etfs(tickers))
 
         assert f"Comparing {server.MAX_COMPARE} ETF(s)" in out
         assert "omitted: ETF10, ETF11, ETF12" in out
@@ -309,8 +314,8 @@ class TestCompareEtfsTool:
             mock.funds_data = None
             return mock
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", side_effect=ticker_factory):
-            out = await server.compare_etfs(["SPY", "FAKE", "VTI"])
+        with patch("mcp_etf_holdings.providers.yf.Ticker", side_effect=ticker_factory):
+            out = text(await server.compare_etfs(["SPY", "FAKE", "VTI"]))
 
         assert "| SPY |" in out and "| VTI |" in out
         assert "No data returned for: FAKE" in out
@@ -319,23 +324,23 @@ class TestCompareEtfsTool:
     @pytest.mark.asyncio
     async def test_compare_reports_malformed_entry_without_aborting(self, mock_ticker_with_info):
         """A pasted fund name must not raise and discard the valid tickers."""
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
-            out = await server.compare_etfs(["SPY", "VANGUARD S&P 500"])
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info):
+            out = text(await server.compare_etfs(["SPY", "VANGUARD S&P 500"]))
 
         assert "| SPY |" in out
         assert "No data returned for: VANGUARD S&P 500" in out
 
     @pytest.mark.asyncio
     async def test_empty_list_is_rejected(self):
-        assert "Provide a list of ETF tickers" in await server.compare_etfs([])
-        assert "Provide a list of ETF tickers" in await server.compare_etfs(["", "  "])
+        assert "Provide a list of ETF tickers" in text(await server.compare_etfs([]))
+        assert "Provide a list of ETF tickers" in text(await server.compare_etfs(["", "  "]))
 
 
 class TestLookupSymbolTool:
     @pytest.mark.asyncio
     async def test_any_returns_equities_that_search_etfs_drops(self, equity_quotes):
         with _patch_search(equity_quotes):
-            out = await server.lookup_symbol("nvidia")
+            out = text(await server.lookup_symbol("nvidia"))
 
         assert "| NVDA | NVIDIA Corporation | EQUITY | NASDAQ |" in out
         assert "SMH" in out
@@ -344,7 +349,7 @@ class TestLookupSymbolTool:
     @pytest.mark.asyncio
     async def test_stock_filter_excludes_funds(self, equity_quotes):
         with _patch_search(equity_quotes):
-            out = await server.lookup_symbol("nvidia", asset_type="stock")
+            out = text(await server.lookup_symbol("nvidia", asset_type="stock"))
 
         assert "NVDA" in out
         assert "SMH" not in out and "NQ=F" not in out
@@ -352,24 +357,24 @@ class TestLookupSymbolTool:
     @pytest.mark.asyncio
     async def test_etf_filter_excludes_stocks(self, equity_quotes):
         with _patch_search(equity_quotes):
-            out = await server.lookup_symbol("semiconductor", asset_type="ETF")
+            out = text(await server.lookup_symbol("semiconductor", asset_type="ETF"))
 
         assert "SMH" in out
         assert "NVDA" not in out
 
     @pytest.mark.asyncio
     async def test_unknown_asset_type_rejected(self):
-        out = await server.lookup_symbol("nvidia", asset_type="crypto")
+        out = text(await server.lookup_symbol("nvidia", asset_type="crypto"))
         assert "Unknown asset_type 'crypto'" in out
 
     @pytest.mark.asyncio
     async def test_blank_query_rejected(self):
-        assert "non-empty name" in await server.lookup_symbol("   ")
+        assert "non-empty name" in text(await server.lookup_symbol("   "))
 
     @pytest.mark.asyncio
     async def test_no_results_message(self):
         with _patch_search([]):
-            out = await server.lookup_symbol("zzzznotreal")
+            out = text(await server.lookup_symbol("zzzznotreal"))
         assert "No symbols found matching 'zzzznotreal'" in out
 
 
@@ -377,7 +382,7 @@ class TestStockExposureSummaryTool:
     @pytest.mark.asyncio
     async def test_joins_weight_with_cost_and_size(self, mock_ticker_with_info):
         with _patch_ticker(mock_ticker_with_info):
-            out = await server.stock_exposure_summary("AAPL", limit=2)
+            out = text(await server.stock_exposure_summary("AAPL", limit=2))
 
         assert "ETF exposure to **AAPL**" in out
         assert "| ETF | Name | Weight | Rank | Expense | AUM |" in out
@@ -388,7 +393,7 @@ class TestStockExposureSummaryTool:
     @pytest.mark.asyncio
     async def test_not_found_message(self, mock_ticker_no_holdings):
         with _patch_ticker(mock_ticker_no_holdings):
-            out = await server.stock_exposure_summary("NOTHELD")
+            out = text(await server.stock_exposure_summary("NOTHELD"))
 
         assert "'NOTHELD' was not found" in out
         assert f"{len(TOP_ETFS)} ETFs searched" in out
@@ -402,9 +407,9 @@ class TestCompanyNameFallback:
         self, mock_ticker_with_info, equity_quotes
     ):
         with _patch_ticker(mock_ticker_with_info), _patch_search(equity_quotes):
-            out = await server.find_etfs_holding_stock(
+            out = text(await server.find_etfs_holding_stock(
                 "Nvidia", custom_etf_universe='["SPY"]'
-            )
+            ))
 
         assert '> Interpreted "Nvidia" as **NVDA**' in out
         assert "**NVDA** appears in the top holdings" in out
@@ -414,7 +419,7 @@ class TestCompanyNameFallback:
         self, mock_ticker_with_info, equity_quotes
     ):
         with _patch_ticker(mock_ticker_with_info), _patch_search(equity_quotes):
-            out = await server.stock_exposure_summary("Nvidia", limit=1)
+            out = text(await server.stock_exposure_summary("Nvidia", limit=1))
 
         assert '> Interpreted "Nvidia" as **NVDA**' in out
         assert "ETF exposure to **NVDA**" in out
@@ -428,9 +433,9 @@ class TestCompanyNameFallback:
             with patch(
                 "mcp_etf_holdings.server.resolve_stock_symbol"
             ) as resolver:
-                out = await server.find_etfs_holding_stock(
+                out = text(await server.find_etfs_holding_stock(
                     "AAPL", custom_etf_universe='["SPY"]'
-                )
+                ))
 
         resolver.assert_not_called()
         assert "Interpreted" not in out
@@ -438,9 +443,9 @@ class TestCompanyNameFallback:
     @pytest.mark.asyncio
     async def test_unresolvable_name_reports_plainly(self, mock_ticker_no_holdings):
         with _patch_ticker(mock_ticker_no_holdings), _patch_search([]):
-            out = await server.find_etfs_holding_stock(
+            out = text(await server.find_etfs_holding_stock(
                 "Not A Real Company", custom_etf_universe='["SPY"]'
-            )
+            ))
 
         assert "was not found" in out
         assert "Interpreted" not in out
@@ -562,21 +567,21 @@ class TestLimitClamping:
     @pytest.mark.asyncio
     async def test_stock_exposure_summary_clamps_high(self, mock_ticker_with_info):
         with _patch_ticker(mock_ticker_with_info):
-            out = await server.stock_exposure_summary("AAPL", limit=999)
+            out = text(await server.stock_exposure_summary("AAPL", limit=999))
 
         assert "25 fund(s)" in out
 
     @pytest.mark.asyncio
     async def test_stock_exposure_summary_clamps_low(self, mock_ticker_with_info):
         with _patch_ticker(mock_ticker_with_info):
-            out = await server.stock_exposure_summary("AAPL", limit=0)
+            out = text(await server.stock_exposure_summary("AAPL", limit=0))
 
         assert "1 fund(s)" in out
 
     @pytest.mark.asyncio
     async def test_lookup_symbol_clamps_high(self, equity_quotes):
         with _patch_search(equity_quotes * 20):
-            out = await server.lookup_symbol("nvidia", limit=999)
+            out = text(await server.lookup_symbol("nvidia", limit=999))
 
         assert "(25 result(s))" in out
 
@@ -587,7 +592,7 @@ class TestLimitClamping:
             for i in range(60)
         ]
         with _patch_search(quotes):
-            out = await server.search_etfs("fund", limit=999)
+            out = text(await server.search_etfs("fund", limit=999))
 
         assert "(25 result(s))" in out
 
@@ -626,9 +631,9 @@ class TestDefensiveValidationPaths:
     async def test_blank_stock_is_handled_not_raised(self):
         """The fetcher raises on a blank ticker; the tool must still answer."""
         with _patch_search([]):
-            out = await server.find_etfs_holding_stock(
+            out = text(await server.find_etfs_holding_stock(
                 "   ", custom_etf_universe='["SPY"]'
-            )
+            ))
 
         assert "was not found" in out
 
@@ -640,9 +645,9 @@ class TestDefensiveValidationPaths:
             "mcp_etf_holdings.server._find_etfs_holding_stock",
             side_effect=ValueError("boom"),
         ):
-            out = await server.find_etfs_holding_stock(
+            out = text(await server.find_etfs_holding_stock(
                 "Nvidia", custom_etf_universe='["SPY"]'
-            )
+            ))
 
         assert 'Interpreted "Nvidia" as **NVDA**' in out
         assert "was not found" in out

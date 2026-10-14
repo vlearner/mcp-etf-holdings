@@ -27,9 +27,11 @@ import sys
 from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult
 from pydantic import Field
 
 from .fetcher import (
+    default_universe,
     find_etfs_holding_stock as _find_etfs_holding_stock,
     get_etf_holdings,
     get_etf_info,
@@ -38,6 +40,7 @@ from .fetcher import (
     resolve_stock_symbol,
     search_etfs as _search_etfs,
     search_symbols as _search_symbols,
+    supports_search,
 )
 from .formatting import (
     EMPTY,
@@ -48,18 +51,20 @@ from .formatting import (
     markdown_table,
 )
 from .prompts import register_prompts
-from .top_etfs import TOP_ETFS
+from .providers import ProviderError, get_provider
+from .results import notice, reply
 
 # Comparing more funds than this makes the table unreadable and fans out a lot
-# of Yahoo requests for a single tool call.
+# of upstream requests for a single tool call.
 MAX_COMPARE = 10
 
 mcp = FastMCP(
     "ETF Holdings",
     instructions=(
         "Use these tools to look up ETF holdings data and perform reverse "
-        "lookups (which ETFs hold a given stock). All data is sourced live "
-        "from Yahoo Finance via yfinance.\n\n"
+        "lookups (which ETFs hold a given stock). Data comes from the "
+        "configured data provider (Yahoo Finance by default); each result's "
+        "structured content names it in `source`.\n\n"
         "Guidelines:\n"
         "- When the user asks about more than one ETF, call compare_etfs once "
         "with all the tickers instead of calling etf_info repeatedly — it "
@@ -70,8 +75,8 @@ mcp = FastMCP(
         "- stock_exposure_summary answers 'what is the cheapest/largest ETF "
         "for exposure to X'; find_etfs_holding_stock is the plain reverse "
         "lookup without cost data.\n"
-        "- Tools return markdown; present tables as tables, do not re-flow "
-        "them into prose lists."
+        "- Tools return markdown text plus structured JSON; present tables as "
+        "tables, do not re-flow them into prose lists."
     ),
 )
 
@@ -145,6 +150,16 @@ async def _lookup_with_name_fallback(
     return results, resolved, note
 
 
+_NO_SEARCH = (
+    "Name and theme search is not available with the '{source}' data provider. "
+    "Use exact ticker symbols."
+)
+
+
+def _no_search() -> CallToolResult:
+    return notice(_NO_SEARCH.format(source=get_provider().name), {"results": []})
+
+
 # ---------------------------------------------------------------------------
 # Tool: etf_info
 # ---------------------------------------------------------------------------
@@ -155,7 +170,7 @@ async def etf_info(
     ticker: Annotated[
         str, Field(description="ETF ticker symbol, e.g. 'SPY' or 'QQQ'")
     ],
-) -> str:
+) -> CallToolResult:
     """Return metadata for a single ETF: name, category, AUM, expense ratio, NAV, and trailing returns.
 
     For two or more ETFs, use compare_etfs instead — it returns one table.
@@ -163,7 +178,10 @@ async def etf_info(
     ticker = ticker.strip()
     data = await get_etf_info(ticker)
     if not data.get("name"):
-        return f"No data found for ticker '{ticker}'. Verify it is a valid ETF symbol."
+        return notice(
+            f"No data found for ticker '{ticker}'. Verify it is a valid ETF symbol.",
+            {"found": False, "etf": None},
+        )
 
     lines = [
         f"**{data['ticker']}** – {data['name']}",
@@ -176,7 +194,7 @@ async def etf_info(
         f"3-yr return   : {fmt_return(data['three_year_return'])}",
         f"5-yr return   : {fmt_return(data['five_year_return'])}",
     ]
-    return "\n".join(lines)
+    return reply("\n".join(lines), {"found": True, "etf": data})
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +213,7 @@ async def compare_etfs(
             )
         ),
     ],
-) -> str:
+) -> CallToolResult:
     """
     Compare several ETFs side by side in a single table: name, category, AUM,
     expense ratio, dividend yield, and YTD / 3-yr / 5-yr returns.
@@ -203,12 +221,13 @@ async def compare_etfs(
     Use this whenever the user mentions more than one ETF — it is one call
     instead of several etf_info calls, and the result is already tabular.
     """
+    empty = {"etfs": [], "missing": [], "omitted": []}
     if not isinstance(tickers, list) or not tickers:
-        return "Provide a list of ETF tickers, e.g. ['SPY', 'QQQ', 'VTI']."
+        return notice("Provide a list of ETF tickers, e.g. ['SPY', 'QQQ', 'VTI'].", empty)
 
     symbols = _normalize_tickers(tickers)
     if not symbols:
-        return "Provide a list of ETF tickers, e.g. ['SPY', 'QQQ', 'VTI']."
+        return notice("Provide a list of ETF tickers, e.g. ['SPY', 'QQQ', 'VTI'].", empty)
 
     dropped = symbols[MAX_COMPARE:]
     symbols = symbols[:MAX_COMPARE]
@@ -220,12 +239,14 @@ async def compare_etfs(
 
     rows: list[list[object]] = []
     missing: list[str] = []
+    found: list[dict[str, Any]] = []
     for symbol in symbols:
         data = info_by_symbol.get(symbol, {})
         if not data.get("name"):
             missing.append(symbol)
             rows.append([symbol] + [EMPTY] * 8)
             continue
+        found.append(data)
         rows.append(
             [
                 symbol,
@@ -257,7 +278,9 @@ async def compare_etfs(
             f"\nOnly the first {MAX_COMPARE} tickers were compared; "
             f"omitted: {', '.join(dropped)}."
         )
-    return "\n".join(out)
+    return reply(
+        "\n".join(out), {"etfs": found, "missing": missing, "omitted": dropped}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -268,14 +291,15 @@ async def compare_etfs(
 @mcp.tool()
 async def etf_holdings(
     ticker: Annotated[str, Field(description="ETF ticker symbol, e.g. 'SPY'")],
-) -> str:
+) -> CallToolResult:
     """Return the top holdings of an ETF with their portfolio weight percentages."""
     ticker = ticker.strip()
     holdings = await get_etf_holdings(ticker)
     if not holdings:
-        return (
+        return notice(
             f"No holdings data found for '{ticker}'. "
-            "The ticker may not be an ETF, or holdings data may be unavailable."
+            "The ticker may not be an ETF, or holdings data may be unavailable.",
+            {"ticker": ticker.upper(), "holdings": []},
         )
 
     rows = [
@@ -287,7 +311,13 @@ async def etf_holdings(
         rows,
         align=["right", "left", "left", "right"],
     )
-    return f"Top holdings of **{ticker.upper()}**:\n\n{table}"
+    return reply(
+        f"Top holdings of **{ticker.upper()}**:\n\n{table}",
+        {
+            "ticker": ticker.upper(),
+            "holdings": [{"rank": i, **h} for i, h in enumerate(holdings, 1)],
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -319,9 +349,9 @@ async def find_etfs_holding_stock(
             )
         ),
     ] = "",
-) -> str:
+) -> CallToolResult:
     """
-    Reverse-lookup: find ETFs (from a ~365-ETF universe or a custom list)
+    Reverse-lookup: find ETFs (from the default universe, ~365 ETFs, or a custom list)
     that hold a given stock in their disclosed top holdings.
 
     Results are sorted by the stock's weight in each ETF, highest first.
@@ -334,20 +364,29 @@ async def find_etfs_holding_stock(
         try:
             universe = json.loads(custom_etf_universe)
             if not isinstance(universe, list):
-                return "custom_etf_universe must be a JSON array of ticker strings."
+                return notice(
+                    "custom_etf_universe must be a JSON array of ticker strings.",
+                    {"matches": []},
+                )
         except json.JSONDecodeError as e:
-            return f"Invalid JSON for custom_etf_universe: {e}"
+            return notice(f"Invalid JSON for custom_etf_universe: {e}", {"matches": []})
 
     results, symbol, note = await _lookup_with_name_fallback(
         stock_ticker, limit=limit, universe=universe
     )
-    searched = len(universe) if universe else len(TOP_ETFS)
+    searched = len(universe) if universe else len(default_universe())
+    base = {
+        "stock": symbol,
+        "interpreted_from": stock_ticker.strip() if note else None,
+        "searched": searched,
+    }
 
     if not results:
-        return (
+        return notice(
             f"{note}'{symbol}' was not found in the top holdings of any ETF "
             f"among the {searched} ETFs searched. "
-            "Try a custom_etf_universe or note that only top holdings (~10-15 positions) are checked."
+            "Try a custom_etf_universe or note that only top holdings (~10-15 positions) are checked.",
+            {**base, "matches": []},
         )
 
     rows = [
@@ -363,7 +402,11 @@ async def find_etfs_holding_stock(
         f"**{symbol}** appears in the top holdings of "
         f"{len(results)} ETF(s) (searched {searched}):"
     )
-    return f"{note}{header}\n\n{table}"
+    matches = [
+        {"etf": r["etf"], "weight_pct": r["weight_pct"], "rank_in_etf": r["rank_in_etf"]}
+        for r in results
+    ]
+    return reply(f"{note}{header}\n\n{table}", {**base, "matches": matches})
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +429,7 @@ async def stock_exposure_summary(
         int,
         Field(description="Maximum number of ETFs to return (1-25, default 10)"),
     ] = 10,
-) -> str:
+) -> CallToolResult:
     """
     Find the ETFs that give exposure to a stock, with each fund's weight in that
     stock alongside its expense ratio and AUM.
@@ -397,11 +440,18 @@ async def stock_exposure_summary(
     limit = max(1, min(limit, 25))
 
     results, symbol, note = await _lookup_with_name_fallback(stock, limit=limit)
+    searched = len(default_universe())
+    base = {
+        "stock": symbol,
+        "interpreted_from": stock.strip() if note else None,
+        "searched": searched,
+    }
     if not results:
-        return (
+        return notice(
             f"{note}'{symbol}' was not found in the top holdings of any of the "
-            f"{len(TOP_ETFS)} ETFs searched. Only top holdings (~10-15 positions) "
-            "are checked, so a small position will not appear."
+            f"{searched} ETFs searched. Only top holdings (~10-15 positions) "
+            "are checked, so a small position will not appear.",
+            {**base, "matches": []},
         )
 
     etfs = [r["etf"] for r in results]
@@ -409,8 +459,19 @@ async def stock_exposure_summary(
     info_by_ticker = {i["ticker"]: i for i in infos}
 
     rows: list[list[object]] = []
+    matches: list[dict[str, Any]] = []
     for r in results:
         info = info_by_ticker.get(r["etf"].upper(), {})
+        matches.append(
+            {
+                "etf": r["etf"],
+                "name": info.get("name") or None,
+                "weight_pct": r["weight_pct"],
+                "rank_in_etf": r["rank_in_etf"],
+                "expense_ratio": info.get("expense_ratio"),
+                "total_assets": info.get("total_assets"),
+            }
+        )
         rows.append(
             [
                 r["etf"],
@@ -431,7 +492,7 @@ async def stock_exposure_summary(
         f"ETF exposure to **{symbol}** — {len(results)} fund(s), "
         "sorted by weight in the stock:"
     )
-    return f"{note}{header}\n\n{table}"
+    return reply(f"{note}{header}\n\n{table}", {**base, "matches": matches})
 
 
 # ---------------------------------------------------------------------------
@@ -454,9 +515,9 @@ async def search_etfs(
         int,
         Field(description="Maximum number of ETFs to return (1-25, default 10)"),
     ] = 10,
-) -> str:
+) -> CallToolResult:
     """
-    Search for ETFs by name, theme, or category using Yahoo Finance search.
+    Search for ETFs by name, theme, or category.
 
     Returns matching ETF tickers with their full names and exchanges.
     Useful for discovering ETFs to pass to etf_info, compare_etfs,
@@ -465,16 +526,33 @@ async def search_etfs(
     To resolve a stock or company name rather than find ETFs, use lookup_symbol.
     """
     if not query.strip():
-        return "Provide a non-empty search query, e.g. 'semiconductor' or 'emerging markets'."
+        return notice(
+            "Provide a non-empty search query, e.g. 'semiconductor' or 'emerging markets'.",
+            {"query": query, "results": []},
+        )
+    if not supports_search():
+        return _no_search()
     limit = max(1, min(limit, 25))
 
     results = await _search_etfs(query, limit=limit)
     if not results:
-        return f"No ETFs found matching '{query}'. Try a broader or different search term."
+        return notice(
+            f"No ETFs found matching '{query}'. Try a broader or different search term.",
+            {"query": query, "results": []},
+        )
 
     rows = [[r["symbol"], r["name"], r["exchange"]] for r in results]
     table = markdown_table(["Symbol", "Name", "Exchange"], rows)
-    return f"ETFs matching **'{query}'** ({len(results)} result(s)):\n\n{table}"
+    return reply(
+        f"ETFs matching **'{query}'** ({len(results)} result(s)):\n\n{table}",
+        {
+            "query": query,
+            "results": [
+                {"symbol": r["symbol"], "name": r["name"], "exchange": r["exchange"]}
+                for r in results
+            ],
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +585,7 @@ async def lookup_symbol(
         str,
         Field(description="Filter results: 'any' (default), 'stock', or 'etf'"),
     ] = "any",
-) -> str:
+) -> CallToolResult:
     """
     Resolve a company or fund name to its ticker symbol.
 
@@ -515,30 +593,52 @@ async def lookup_symbol(
     ticker — "Which ETFs hold Nvidia?" needs NVDA. Covers stocks and ETFs;
     use asset_type='stock' to exclude funds from the results.
     """
+    empty = {"query": query, "results": []}
     if not query.strip():
-        return "Provide a non-empty name to look up, e.g. 'Nvidia' or 'Berkshire Hathaway'."
+        return notice(
+            "Provide a non-empty name to look up, e.g. 'Nvidia' or 'Berkshire Hathaway'.",
+            empty,
+        )
+    if not supports_search():
+        return _no_search()
     limit = max(1, min(limit, 25))
 
     key = asset_type.strip().lower() if isinstance(asset_type, str) else "any"
     if key not in _ASSET_TYPE_FILTERS:
-        return (
+        return notice(
             f"Unknown asset_type '{asset_type}'. "
-            f"Use one of: {', '.join(sorted(_ASSET_TYPE_FILTERS))}."
+            f"Use one of: {', '.join(sorted(_ASSET_TYPE_FILTERS))}.",
+            empty,
         )
 
     results = await _search_symbols(
         query, limit=limit, quote_types=_ASSET_TYPE_FILTERS[key]
     )
     if not results:
-        return (
+        return notice(
             f"No symbols found matching '{query}'"
             + (f" with asset_type '{key}'" if key != "any" else "")
-            + ". Try a different or shorter name."
+            + ". Try a different or shorter name.",
+            empty,
         )
 
     rows = [[r["symbol"], r["name"], r["type"], r["exchange"]] for r in results]
     table = markdown_table(["Symbol", "Name", "Type", "Exchange"], rows)
-    return f"Symbols matching **'{query}'** ({len(results)} result(s)):\n\n{table}"
+    return reply(
+        f"Symbols matching **'{query}'** ({len(results)} result(s)):\n\n{table}",
+        {
+            "query": query,
+            "results": [
+                {
+                    "symbol": r["symbol"],
+                    "name": r["name"],
+                    "type": r["type"],
+                    "exchange": r["exchange"],
+                }
+                for r in results
+            ],
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -580,9 +680,16 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
+    try:
+        # Load now so a misconfigured ETF_DATA_PROVIDER fails at startup with a
+        # clear message, not on the first tool call.
+        provider = get_provider()
+    except ProviderError as e:
+        sys.exit(f"mcp-etf-holdings: {e}")
+    print(f"mcp-etf-holdings: data provider: {provider.name}", file=sys.stderr)
     if args.transport == "http":
         # The server has no authentication, so anything but loopback exposes
-        # Yahoo-backed tools to the network. Allow it, but say so loudly.
+        # data tools to the network. Allow it, but say so loudly.
         if args.host not in ("127.0.0.1", "localhost", "::1"):
             print(
                 f"WARNING: binding to {args.host} with no authentication; "

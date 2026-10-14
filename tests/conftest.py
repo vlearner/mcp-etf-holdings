@@ -18,6 +18,17 @@ def clear_all_caches():
 
 
 @pytest.fixture(autouse=True)
+def reset_provider(monkeypatch):
+    """Every test starts on the default provider, whatever the environment says."""
+    from mcp_etf_holdings import providers
+
+    monkeypatch.delenv("ETF_DATA_PROVIDER", raising=False)
+    providers.set_provider(None)
+    yield
+    providers.set_provider(None)
+
+
+@pytest.fixture(autouse=True)
 def offline_search():
     """Default yf.Search to no results so no test can reach the network.
 
@@ -27,7 +38,7 @@ def offline_search():
     """
     mock_search = MagicMock()
     mock_search.quotes = []
-    with patch("mcp_etf_holdings.fetcher.yf.Search", return_value=mock_search):
+    with patch("mcp_etf_holdings.providers.yf.Search", return_value=mock_search):
         yield
 
 

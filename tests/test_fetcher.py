@@ -131,7 +131,7 @@ class TestEtfInfoSync:
     def test_get_etf_info_success(self, mock_ticker_with_info):
         _info_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info):
             result = _etf_info_sync("SPY")
 
         assert result["ticker"] == "SPY"
@@ -150,7 +150,7 @@ class TestEtfInfoSync:
     def test_get_etf_info_no_info(self, mock_ticker_no_info):
         _info_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_no_info):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_no_info):
             result = _etf_info_sync("FAKEETF")
 
         assert result["ticker"] == "FAKEETF"
@@ -159,7 +159,7 @@ class TestEtfInfoSync:
     def test_get_etf_info_caching(self, mock_ticker_with_info):
         _info_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info) as mock_yf:
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info) as mock_yf:
             result1 = _etf_info_sync("SPY")
             result2 = _etf_info_sync("SPY")
 
@@ -169,7 +169,7 @@ class TestEtfInfoSync:
     def test_get_etf_info_case_insensitive(self, mock_ticker_with_info):
         _info_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info):
             result = _etf_info_sync("SPY")
 
         assert result["ticker"] == "SPY"
@@ -184,7 +184,7 @@ class TestEtfInfoSync:
             "regularMarketPrice": 450.0,
         }
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker):
             result = _etf_info_sync("SPY")
 
         assert result["name"] == "SPY"
@@ -209,7 +209,7 @@ class TestExpenseRatioUnits:
     def test_net_expense_ratio_is_percent_and_converted(self):
         """netExpenseRatio 0.18 means 0.18%, i.e. 0.0018 — not 18%."""
         _info_cache.clear()
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=self._info_with(netExpenseRatio=0.18)):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=self._info_with(netExpenseRatio=0.18)):
             result = _etf_info_sync("TEST")
         assert result["expense_ratio"] == pytest.approx(0.0018)
 
@@ -217,7 +217,7 @@ class TestExpenseRatioUnits:
         """The legacy field needs no conversion — 0.0018 is already 0.18%."""
         _info_cache.clear()
         with patch(
-            "mcp_etf_holdings.fetcher.yf.Ticker",
+            "mcp_etf_holdings.providers.yf.Ticker",
             return_value=self._info_with(annualReportExpenseRatio=0.0018),
         ):
             result = _etf_info_sync("TEST")
@@ -226,11 +226,11 @@ class TestExpenseRatioUnits:
     def test_both_field_families_agree_on_the_same_fee(self):
         """0.18 (percent field) and 0.0018 (fraction field) must not both be taken raw."""
         _info_cache.clear()
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=self._info_with(netExpenseRatio=0.18)):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=self._info_with(netExpenseRatio=0.18)):
             from_percent = _etf_info_sync("TEST")["expense_ratio"]
         _info_cache.clear()
         with patch(
-            "mcp_etf_holdings.fetcher.yf.Ticker",
+            "mcp_etf_holdings.providers.yf.Ticker",
             return_value=self._info_with(annualReportExpenseRatio=0.0018),
         ):
             from_fraction = _etf_info_sync("TEST")["expense_ratio"]
@@ -240,7 +240,7 @@ class TestExpenseRatioUnits:
         """Net is what the investor actually pays after waivers."""
         _info_cache.clear()
         with patch(
-            "mcp_etf_holdings.fetcher.yf.Ticker",
+            "mcp_etf_holdings.providers.yf.Ticker",
             return_value=self._info_with(netExpenseRatio=0.20, grossExpenseRatio=0.35),
         ):
             result = _etf_info_sync("TEST")
@@ -250,7 +250,7 @@ class TestExpenseRatioUnits:
         """Yahoo populates netExpenseRatio today; it leads the preference order."""
         _info_cache.clear()
         with patch(
-            "mcp_etf_holdings.fetcher.yf.Ticker",
+            "mcp_etf_holdings.providers.yf.Ticker",
             return_value=self._info_with(netExpenseRatio=0.50, annualReportExpenseRatio=0.0018),
         ):
             result = _etf_info_sync("TEST")
@@ -259,20 +259,20 @@ class TestExpenseRatioUnits:
     def test_zero_expense_ratio_is_preserved_not_treated_as_missing(self):
         """A genuine zero-fee fund must survive; `or`-chaining used to drop it."""
         _info_cache.clear()
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=self._info_with(netExpenseRatio=0.0)):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=self._info_with(netExpenseRatio=0.0)):
             result = _etf_info_sync("TEST")
         assert result["expense_ratio"] == 0.0
 
     def test_missing_everywhere_is_none(self):
         _info_cache.clear()
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=self._info_with()):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=self._info_with()):
             result = _etf_info_sync("TEST")
         assert result["expense_ratio"] is None
 
     def test_non_numeric_value_falls_through_to_next_field(self):
         _info_cache.clear()
         with patch(
-            "mcp_etf_holdings.fetcher.yf.Ticker",
+            "mcp_etf_holdings.providers.yf.Ticker",
             return_value=self._info_with(netExpenseRatio="n/a", annualReportExpenseRatio=0.0018),
         ):
             result = _etf_info_sync("TEST")
@@ -288,7 +288,7 @@ class TestExpenseRatioUnits:
         ]:
             _info_cache.clear()
             with patch(
-                "mcp_etf_holdings.fetcher.yf.Ticker",
+                "mcp_etf_holdings.providers.yf.Ticker",
                 return_value=self._info_with(netExpenseRatio=net_field_value),
             ):
                 result = _etf_info_sync(ticker)
@@ -302,7 +302,7 @@ class TestEtfHoldingsSync:
     def test_get_etf_holdings_success(self, mock_ticker_with_info):
         _holdings_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info):
             result = _etf_holdings_sync("SPY")
 
         assert len(result) == 5
@@ -319,7 +319,7 @@ class TestEtfHoldingsSync:
     def test_get_etf_holdings_caching(self, mock_ticker_with_info):
         _holdings_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info) as mock_yf:
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info) as mock_yf:
             result1 = _etf_holdings_sync("SPY")
             result2 = _etf_holdings_sync("SPY")
 
@@ -329,7 +329,7 @@ class TestEtfHoldingsSync:
     def test_get_etf_holdings_no_info(self, mock_ticker_no_info):
         _holdings_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_no_info):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_no_info):
             result = _etf_holdings_sync("XYZ")
 
         assert result == []
@@ -337,7 +337,7 @@ class TestEtfHoldingsSync:
     def test_get_etf_holdings_no_holdings(self, mock_ticker_no_holdings):
         _holdings_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_no_holdings):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_no_holdings):
             result = _etf_holdings_sync("BND")
 
         assert result == []
@@ -345,7 +345,7 @@ class TestEtfHoldingsSync:
     def test_legit_empty_holdings_are_cached(self, mock_ticker_no_holdings):
         _holdings_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_no_holdings) as mock_yf:
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_no_holdings) as mock_yf:
             _etf_holdings_sync("BND")
             _etf_holdings_sync("BND")
 
@@ -357,7 +357,7 @@ class TestEtfHoldingsSync:
         mock_ticker = MagicMock()
         mock_ticker.funds_data = None
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker):
             result = _etf_holdings_sync("SPY")
 
         assert result == []
@@ -365,7 +365,7 @@ class TestEtfHoldingsSync:
     def test_get_etf_holdings_case_insensitive(self, mock_ticker_with_info):
         _holdings_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info):
             result = _etf_holdings_sync("SPY")
 
         assert len(result) == 5
@@ -383,7 +383,7 @@ class TestEtfHoldingsSync:
         mock_funds_data.top_holdings = holdings_df
         mock_ticker.funds_data = mock_funds_data
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker):
             result = _etf_holdings_sync("SPY")
 
         assert result[0]["weight_pct"] == pytest.approx(7.0)
@@ -402,7 +402,7 @@ class TestEtfHoldingsSync:
         mock_funds_data.top_holdings = holdings_df
         mock_ticker.funds_data = mock_funds_data
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker):
             result = _etf_holdings_sync("SPY")
 
         assert result[0]["weight_pct"] == 100.0  # Clamped to max
@@ -431,7 +431,7 @@ class TestEtfHoldingsSync:
         mock_funds_data.top_holdings = holdings_df
         mock_ticker.funds_data = mock_funds_data
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker):
             result = _etf_holdings_sync("SPY")
 
         assert result[0]["weight_pct"] == pytest.approx(0.5)
@@ -444,7 +444,7 @@ class TestFindEtfsHoldingStockSync:
     def test_find_etfs_holding_stock_success(self, mock_ticker_with_info):
         _holdings_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info):
             result = _find_etfs_holding_stock_sync("AAPL", etf_universe=["SPY", "QQQ"], limit=10)
 
         assert len(result) <= 2
@@ -454,7 +454,7 @@ class TestFindEtfsHoldingStockSync:
     def test_find_etfs_holding_stock_limit(self, mock_ticker_with_info):
         _holdings_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info):
             result = _find_etfs_holding_stock_sync("AAPL", etf_universe=["SPY", "QQQ", "IVV"], limit=2)
 
         assert len(result) <= 2
@@ -462,7 +462,7 @@ class TestFindEtfsHoldingStockSync:
     def test_find_etfs_holding_stock_not_found(self, mock_ticker_with_info):
         _holdings_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info):
             result = _find_etfs_holding_stock_sync("NOTFOUND", etf_universe=["SPY", "QQQ"], limit=10)
 
         assert result == []
@@ -493,7 +493,7 @@ class TestFindEtfsHoldingStockSync:
             mock_ticker.funds_data = mock_funds_data
             return mock_ticker
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", side_effect=mock_yf_ticker_side_effect):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", side_effect=mock_yf_ticker_side_effect):
             result = _find_etfs_holding_stock_sync("AAPL", etf_universe=["SPY", "QQQ"], limit=10)
 
         assert len(result) == 2
@@ -503,7 +503,7 @@ class TestFindEtfsHoldingStockSync:
     def test_find_etfs_holding_stock_case_insensitive(self, mock_ticker_with_info):
         _holdings_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info):
             result = _find_etfs_holding_stock_sync("aapl", etf_universe=["SPY"], limit=10)
 
         assert len(result) == 1
@@ -517,7 +517,7 @@ class TestAsyncWrappers:
     async def test_get_etf_info_async(self, mock_ticker_with_info):
         _info_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info):
             result = await get_etf_info("SPY")
 
         assert result["ticker"] == "SPY"
@@ -527,7 +527,7 @@ class TestAsyncWrappers:
     async def test_get_etf_holdings_async(self, mock_ticker_with_info):
         _holdings_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info):
             result = await get_etf_holdings("SPY")
 
         assert len(result) == 5
@@ -537,7 +537,7 @@ class TestAsyncWrappers:
     async def test_find_etfs_holding_stock_async(self, mock_ticker_with_info):
         _holdings_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info):
             result = await find_etfs_holding_stock("AAPL", etf_universe=["SPY", "QQQ"], limit=10)
 
         assert len(result) <= 2
@@ -547,7 +547,7 @@ class TestAsyncWrappers:
     async def test_find_etfs_holding_stock_default_universe(self, mock_ticker_with_info):
         _holdings_cache.clear()
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info):
             result = await find_etfs_holding_stock("AAPL", limit=1)
 
         assert isinstance(result, list)
@@ -562,7 +562,7 @@ class TestAsyncWrappers:
             ]
             return mock_search
 
-        with patch("mcp_etf_holdings.fetcher.yf.Search", side_effect=mock_search):
+        with patch("mcp_etf_holdings.providers.yf.Search", side_effect=mock_search):
             result = await search_etfs("S&P", limit=2)
 
         assert len(result) == 2
@@ -615,7 +615,7 @@ class TestSearchSymbols:
     def _patch(self, quotes):
         mock_search = MagicMock()
         mock_search.quotes = quotes
-        return patch("mcp_etf_holdings.fetcher.yf.Search", return_value=mock_search)
+        return patch("mcp_etf_holdings.providers.yf.Search", return_value=mock_search)
 
     def test_no_filter_returns_every_quote_type(self):
         with self._patch(self.QUOTES):
@@ -644,7 +644,7 @@ class TestSearchSymbols:
 
     def test_search_failure_returns_empty(self):
         with patch(
-            "mcp_etf_holdings.fetcher.yf.Search", side_effect=Exception("network down")
+            "mcp_etf_holdings.providers.yf.Search", side_effect=Exception("network down")
         ):
             assert _search_symbols_sync("nvidia", 10) == []
 
@@ -660,7 +660,7 @@ class TestResolveStockSymbol:
     def _patch(self, quotes):
         mock_search = MagicMock()
         mock_search.quotes = quotes
-        return patch("mcp_etf_holdings.fetcher.yf.Search", return_value=mock_search)
+        return patch("mcp_etf_holdings.providers.yf.Search", return_value=mock_search)
 
     @pytest.mark.asyncio
     async def test_returns_best_match(self):
@@ -685,7 +685,7 @@ class TestResolveStockSymbol:
 
     @pytest.mark.asyncio
     async def test_blank_query_returns_none_without_searching(self):
-        with patch("mcp_etf_holdings.fetcher.yf.Search") as search:
+        with patch("mcp_etf_holdings.providers.yf.Search") as search:
             assert await resolve_stock_symbol("   ") is None
         search.assert_not_called()
 
@@ -698,7 +698,7 @@ class TestGetEtfInfos:
             mock.info = dict(mock_ticker_info, longName=f"Fund {symbol}")
             return mock
 
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", side_effect=ticker_factory):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", side_effect=ticker_factory):
             results = await get_etf_infos(["VTI", "SPY", "QQQ"])
 
         assert [r["ticker"] for r in results] == ["VTI", "SPY", "QQQ"]
@@ -754,7 +754,7 @@ class TestNegativeCaching:
 
     def test_info_failure_is_not_refetched(self):
         with patch(
-            "mcp_etf_holdings.fetcher.yf.Ticker", side_effect=Exception("boom")
+            "mcp_etf_holdings.providers.yf.Ticker", side_effect=Exception("boom")
         ) as ticker:
             first = _etf_info_sync("SPY")
             second = _etf_info_sync("SPY")
@@ -764,7 +764,7 @@ class TestNegativeCaching:
 
     def test_holdings_failure_is_not_refetched(self):
         with patch(
-            "mcp_etf_holdings.fetcher.yf.Ticker", side_effect=Exception("boom")
+            "mcp_etf_holdings.providers.yf.Ticker", side_effect=Exception("boom")
         ) as ticker:
             assert _etf_holdings_sync("SPY") == []
             assert _etf_holdings_sync("SPY") == []
@@ -773,7 +773,7 @@ class TestNegativeCaching:
 
     def test_error_cache_is_per_ticker(self):
         with patch(
-            "mcp_etf_holdings.fetcher.yf.Ticker", side_effect=Exception("boom")
+            "mcp_etf_holdings.providers.yf.Ticker", side_effect=Exception("boom")
         ) as ticker:
             _etf_holdings_sync("SPY")
             _etf_holdings_sync("QQQ")
@@ -782,7 +782,7 @@ class TestNegativeCaching:
 
     def test_failed_info_returns_the_full_shape(self):
         """Callers index these keys directly; a short dict would KeyError."""
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", side_effect=Exception("boom")):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", side_effect=Exception("boom")):
             result = _etf_info_sync("SPY")
 
         assert set(result) == {
@@ -792,7 +792,7 @@ class TestNegativeCaching:
         }
 
     def test_cached_error_shape_matches_fresh_error_shape(self):
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", side_effect=Exception("boom")):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", side_effect=Exception("boom")):
             fresh = _etf_info_sync("SPY")
             cached = _etf_info_sync("SPY")
 
@@ -804,7 +804,7 @@ class TestHoldingsEdgeCases:
         df = pd.DataFrame({"Symbol": ["AAPL"], "Name": ["Apple"], "% Assets": ["n/a"]})
         mock = MagicMock()
         mock.funds_data.top_holdings = df
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock):
             result = _etf_holdings_sync("SPY")
 
         assert result[0]["weight_pct"] == 0.0
@@ -813,21 +813,21 @@ class TestHoldingsEdgeCases:
         df = pd.DataFrame({"Symbol": ["AAPL"], "Name": ["Apple"], "% Assets": [7.5]})
         mock = MagicMock()
         mock.funds_data.top_holdings = df
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock):
             assert _etf_holdings_sync("SPY")[0]["weight_pct"] == 7.5
 
     def test_weight_is_clamped_to_100(self):
         df = pd.DataFrame({"Symbol": ["AAPL"], "Name": ["Apple"], "% Assets": [420.0]})
         mock = MagicMock()
         mock.funds_data.top_holdings = df
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock):
             assert _etf_holdings_sync("SPY")[0]["weight_pct"] == 100.0
 
     def test_missing_funds_data_caches_empty(self):
         """Bond and commodity funds legitimately have none — cache, don't retry."""
         mock = MagicMock()
         mock.funds_data = None
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock) as ticker:
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock) as ticker:
             assert _etf_holdings_sync("BND") == []
             assert _etf_holdings_sync("BND") == []
 
@@ -837,7 +837,7 @@ class TestHoldingsEdgeCases:
         df = pd.DataFrame({"Symbol": ["aapl"], "Name": ["Apple"], "% Assets": [0.07]})
         mock = MagicMock()
         mock.funds_data.top_holdings = df
-        with patch("mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock):
+        with patch("mcp_etf_holdings.providers.yf.Ticker", return_value=mock):
             assert _etf_holdings_sync("SPY")[0]["symbol"] == "AAPL"
 
 
@@ -880,7 +880,7 @@ class TestFindEtfsUniverseValidation:
     @pytest.mark.asyncio
     async def test_duplicate_universe_entries_scanned_once(self, mock_ticker_with_info):
         with patch(
-            "mcp_etf_holdings.fetcher.yf.Ticker", return_value=mock_ticker_with_info
+            "mcp_etf_holdings.providers.yf.Ticker", return_value=mock_ticker_with_info
         ):
             results = await find_etfs_holding_stock(
                 "AAPL", etf_universe=["SPY", "SPY", "SPY"], limit=10

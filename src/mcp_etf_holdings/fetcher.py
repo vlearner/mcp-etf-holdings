@@ -1,13 +1,14 @@
 """
-Data-fetching layer for ETF holdings with security hardening.
+Data-fetching layer: validation, caching and concurrency around a data provider.
 
-All network I/O is synchronous (yfinance) but wrapped so callers can
-await it from async context via run_in_executor.
+Providers (see providers.py) do the actual I/O and may be sync or async. They run
+in a thread pool, so callers can await them from async context.
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 import re
@@ -17,8 +18,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-import yfinance as yf
-
+from .providers import _expense_ratio_fraction, get_provider  # noqa: F401
 from .top_etfs import TOP_ETFS
 
 logger = logging.getLogger(__name__)
@@ -122,41 +122,73 @@ _error_cache = _TTLCache(60.0, max_size=1000)  # 60 second negative cache
 # ---------------------------------------------------------------------------
 
 
-# Expense-ratio fields Yahoo may return, in preference order, tagged with the unit
-# each one uses. Net comes before gross because net is what an investor actually pays
-# after fee waivers.
-#
-# The unit MUST come from the field name, never from the value's magnitude. Unlike
-# trailing returns (see fmt_ret in server.py), an expense ratio of 0.03 is genuinely
-# ambiguous — it is 0.03% as netExpenseRatio but 3% as annualReportExpenseRatio, and
-# both are plausible fees. Guessing here silently misreports costs by 100x.
-_EXPENSE_RATIO_FIELDS: tuple[tuple[str, bool], ...] = (
-    ("netExpenseRatio", True),           # percent, e.g. 0.0945 -> 0.0945%
-    ("grossExpenseRatio", True),         # percent
-    ("annualReportExpenseRatio", False),  # already a fraction, e.g. 0.000945
-    ("expenseRatio", False),             # already a fraction
-)
+_INFO_DEFAULTS: dict[str, Any] = {
+    "ticker": "",
+    "name": "",
+    "category": "",
+    "total_assets": None,
+    "expense_ratio": None,
+    "yield": None,
+    "ytd_return": None,
+    "three_year_return": None,
+    "five_year_return": None,
+    "nav_price": None,
+    "currency": "USD",
+}
 
 
-def _expense_ratio_fraction(info: dict[str, Any]) -> float | None:
-    """Return the expense ratio as a fraction (0.000945 == 0.0945%), or None.
+def _empty_info(ticker: str) -> dict[str, Any]:
+    return {**_INFO_DEFAULTS, "ticker": ticker}
 
-    As of yfinance 1.5.x only `netExpenseRatio` is populated for ETFs; the others are
-    kept as fallbacks for older payloads and mutual funds.
-    """
-    for field, is_percent in _EXPENSE_RATIO_FIELDS:
-        value = info.get(field)
-        if value is None:
+
+def _call_provider(method: Any, *args: Any) -> Any:
+    """Call a provider method from a worker thread; await it if it is async."""
+    result = method(*args)
+    if inspect.isawaitable(result):
+        async def _await() -> Any:
+            return await result
+
+        return asyncio.run(_await())
+    return result
+
+
+def _normalize_info(raw: Any, ticker: str) -> dict[str, Any]:
+    """Coerce a provider's info payload to the shape the tools expect."""
+    if not isinstance(raw, dict):
+        raise TypeError(f"get_info must return a dict, got {type(raw).__name__}")
+    info = {**_INFO_DEFAULTS, **{k: v for k, v in raw.items() if k in _INFO_DEFAULTS}}
+    info["ticker"] = ticker
+    info["name"] = str(info["name"] or "")
+    info["category"] = str(info["category"] or "")
+    info["currency"] = str(info["currency"] or "USD")
+    return info
+
+
+def _normalize_holdings(raw: Any) -> list[dict[str, Any]]:
+    """Coerce a provider's holdings to [{symbol, name, weight_pct}], weight in percent."""
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise TypeError(f"get_holdings must return a list, got {type(raw).__name__}")
+    records: list[dict[str, Any]] = []
+    for h in raw:
+        if not isinstance(h, dict):
             continue
         try:
-            value = float(value)
+            weight = float(h.get("weight_pct", 0.0))
         except (TypeError, ValueError):
-            logger.debug("Non-numeric %s: %r", field, value)
-            continue
-        if value < 0:
-            continue
-        return value / 100.0 if is_percent else value
-    return None
+            weight = 0.0
+        if weight != weight:  # NaN
+            weight = 0.0
+        records.append(
+            {
+                "symbol": str(h.get("symbol", "")).strip().upper(),
+                "name": str(h.get("name", "") or ""),
+                # Sanity clamp to [0, 100]
+                "weight_pct": max(0.0, min(weight, 100.0)),
+            }
+        )
+    return records
 
 
 def _etf_info_sync(ticker: str) -> dict[str, Any]:
@@ -172,55 +204,17 @@ def _etf_info_sync(ticker: str) -> dict[str, Any]:
     # Check error cache to avoid retrying transient failures too soon
     error_cached = _error_cache.get(f"error:info:{ticker}")
     if error_cached is not None:
-        return {
-            "ticker": ticker,
-            "name": "",
-            "category": "",
-            "total_assets": None,
-            "expense_ratio": None,
-            "yield": None,
-            "ytd_return": None,
-            "three_year_return": None,
-            "five_year_return": None,
-            "nav_price": None,
-            "currency": "USD",
-        }
+        return _empty_info(ticker)
 
     try:
-        t = yf.Ticker(ticker, session=None)
-        info = t.info or {}
-        result = {
-            "ticker": ticker,
-            "name": info.get("longName") or info.get("shortName", ""),
-            "category": info.get("category", ""),
-            "total_assets": info.get("totalAssets"),
-            "expense_ratio": _expense_ratio_fraction(info),
-            "yield": info.get("yield"),
-            "ytd_return": info.get("ytdReturn"),
-            "three_year_return": info.get("threeYearAverageReturn"),
-            "five_year_return": info.get("fiveYearAverageReturn"),
-            "nav_price": info.get("navPrice") or info.get("regularMarketPrice"),
-            "currency": info.get("currency", "USD"),
-        }
+        result = _normalize_info(_call_provider(get_provider().get_info, ticker), ticker)
         if result["name"]:
             _info_cache.set(ticker, result)
         return result
     except Exception:
         logger.exception("Failed to fetch info for ticker %s", ticker)
         _error_cache.set(f"error:info:{ticker}", True)
-        return {
-            "ticker": ticker,
-            "name": "",
-            "category": "",
-            "total_assets": None,
-            "expense_ratio": None,
-            "yield": None,
-            "ytd_return": None,
-            "three_year_return": None,
-            "five_year_return": None,
-            "nav_price": None,
-            "currency": "USD",
-        }
+        return _empty_info(ticker)
 
 
 def _etf_holdings_sync(ticker: str) -> list[dict[str, Any]]:
@@ -239,90 +233,65 @@ def _etf_holdings_sync(ticker: str) -> list[dict[str, Any]]:
         return []
 
     try:
-        t = yf.Ticker(ticker, session=None)
-        fd = t.funds_data
-        if fd is None:
-            # Legit empty (e.g. bond/commodity funds): cache so universe
-            # scans don't re-fetch it every time. Exceptions are NOT cached.
-            _holdings_cache.set(ticker, [])
-            return []
-
-        df = fd.top_holdings
-        if df is None or df.empty:
-            _holdings_cache.set(ticker, [])
-            return []
-
-        df = df.reset_index()
-        records = []
-        for _, row in df.iterrows():
-            weight = 0.0
-            # Column name varies across yfinance versions
-            for key in ("Holding Percent", "% Assets", "holdingPercent"):
-                if key in row and row[key] == row[key]:  # skip missing/NaN
-                    try:
-                        weight = float(row[key])
-                        break
-                    except (TypeError, ValueError):
-                        logger.debug("Could not convert weight for %s: %s", ticker, row[key])
-                        continue
-
-            # Normalize percentage: if <= 1, treat as fraction
-            if weight <= 1:
-                weight *= 100
-
-            # Sanity clamp to [0, 100]
-            weight = max(0.0, min(weight, 100.0))
-
-            records.append(
-                {
-                    "symbol": str(row.get("Symbol", row.get("symbol", ""))).upper(),
-                    "name": str(row.get("Name", row.get("holdingName", ""))),
-                    "weight_pct": weight,
-                }
-            )
-
+        records = _normalize_holdings(_call_provider(get_provider().get_holdings, ticker))
+        # An empty list is legit (e.g. bond/commodity funds): cache it so universe
+        # scans don't re-fetch every time. Exceptions are NOT cached here.
         _holdings_cache.set(ticker, records)
         return records
-    except Exception as e:
+    except Exception:
         logger.exception("Failed to fetch holdings for ticker %s", ticker)
         # Cache the error transiently to avoid thundering herd on repeated failures
         _error_cache.set(f"error:{ticker}", True)
         return []
 
 
+def supports_search() -> bool:
+    """Whether the active provider can resolve names and search for ETFs."""
+    return callable(getattr(get_provider(), "search", None))
+
+
+def default_universe() -> list[str]:
+    """ETFs scanned by reverse lookup: the provider's own list, else the built-in one."""
+    custom = getattr(get_provider(), "default_universe", None)
+    if isinstance(custom, (list, tuple)) and custom:
+        return [str(t) for t in custom]
+    return TOP_ETFS
+
+
 def _search_symbols_sync(
     query: str, limit: int, quote_types: tuple[str, ...] | None = None
 ) -> list[dict[str, Any]]:
-    """Search Yahoo for symbols, optionally restricted to given quote types.
-
-    `quote_types=None` returns everything Yahoo matched (equities, ETFs,
-    futures, indices…); pass e.g. ("ETF",) or ("EQUITY", "ETF") to filter.
-    """
+    """Search the provider for symbols, optionally restricted to given quote types."""
     if not isinstance(query, str) or not query.strip():
         raise ValueError("Query must be a non-empty string")
     if not isinstance(limit, int) or limit < 1 or limit > 500:
         raise ValueError("Limit must be an integer between 1 and 500")
 
-    wanted = {t.upper() for t in quote_types} if quote_types else None
+    search = getattr(get_provider(), "search", None)
+    if not callable(search):
+        return []
 
     try:
-        # Request extra results since unwanted quote types get filtered out.
-        search = yf.Search(query, max_results=min(limit * 3, 50))
-        quotes = search.quotes or []
+        raw = _call_provider(search, query, limit, quote_types)
     except Exception:
         logger.exception("Search failed for query %s", query)
         return []
 
+    wanted = {t.upper() for t in quote_types} if quote_types else None
     results: list[dict[str, Any]] = []
-    for q in quotes:
-        quote_type = str(q.get("quoteType", "")).upper()
-        if wanted is not None and quote_type not in wanted:
+    for q in raw or []:
+        if not isinstance(q, dict):
+            continue
+        quote_type = str(q.get("type", "")).upper()
+        # Providers are asked to filter, but re-check so a lax one cannot leak
+        # futures/indices into an ETF search. Untyped rows are kept.
+        if wanted is not None and quote_type and quote_type not in wanted:
             continue
         results.append(
             {
-                "symbol": q.get("symbol", ""),
-                "name": q.get("longname") or q.get("shortname", ""),
-                "exchange": q.get("exchDisp") or q.get("exchange", ""),
+                "symbol": str(q.get("symbol", "")),
+                "name": str(q.get("name", "") or ""),
+                "exchange": str(q.get("exchange", "") or ""),
                 "type": quote_type,
             }
         )
@@ -458,7 +427,7 @@ async def find_etfs_holding_stock(
     if not isinstance(limit, int) or limit < 1 or limit > 1000:
         raise ValueError("Limit must be between 1 and 1000")
 
-    universe = etf_universe if etf_universe is not None else TOP_ETFS
+    universe = etf_universe if etf_universe is not None else default_universe()
 
     if not isinstance(universe, list):
         raise ValueError("etf_universe must be a list of ticker strings")
