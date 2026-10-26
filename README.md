@@ -29,7 +29,7 @@ Search by company name or ticker symbol. "Which ETFs hold Nvidia?" works the sam
 ## Requirements
 
 - Python 3.11+
-- An MCP client: Claude Code, Claude Desktop, VS Code, or Cursor
+- An MCP client: Claude Code, Claude Desktop, VS Code, Cursor, or Antigravity
 - [uv](https://docs.astral.sh/uv/), which runs the server without a manual install
 
 Install uv:
@@ -98,6 +98,39 @@ claude mcp add etf-holdings -- uvx mcp-etf-holdings
 
 Use the same JSON as Claude Desktop. Put it in `.cursor/mcp.json` for one project, or
 `~/.cursor/mcp.json` for all of them. Restart Cursor.
+
+### Antigravity
+
+Antigravity reads `mcpServers` from `mcp_config.json`. Put it in
+`~/.gemini/config/mcp_config.json` for all projects, or `<workspace>/.agents/mcp_config.json`
+for one:
+
+```json
+{
+  "mcpServers": {
+    "etf-holdings": {
+      "command": "uvx",
+      "args": ["mcp-etf-holdings"]
+    }
+  }
+}
+```
+
+In the IDE you can open it from the agent panel: **MCP Servers → Manage MCP Servers →
+View raw config**.
+
+Or install it as a plugin from a checkout of this repo (the plugin is just the same
+config plus a manifest, in [`antigravity/etf-holdings`](antigravity/etf-holdings)):
+
+```bash
+agy plugin install /path/to/mcp-etf-holdings/antigravity/etf-holdings
+```
+
+For the IDE, copy that folder into `.agents/plugins/` (one workspace) or
+`~/.gemini/config/plugins/` (all workspaces).
+
+To use the opt-in HTTP transport instead, Antigravity names the URL field `serverUrl`:
+`{"mcpServers": {"etf-holdings": {"serverUrl": "http://127.0.0.1:8000/mcp"}}}`.
 
 ### Verify it works
 
