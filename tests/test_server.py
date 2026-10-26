@@ -663,11 +663,33 @@ class TestEntryPoint:
         assert server.mcp.settings.host == "127.0.0.1"
         assert server.mcp.settings.port == 9123
 
-    def test_http_on_a_public_host_warns(self, capsys):
-        with patch.object(server.mcp, "run"):
+    def test_http_on_a_public_host_is_refused_by_default(self):
+        with patch.object(server.mcp, "run") as run, pytest.raises(SystemExit) as exc:
             server.main(["--transport", "http", "--host", "0.0.0.0"])
 
+        assert "--allow-insecure" in str(exc.value)
+        run.assert_not_called()
+
+    def test_allow_insecure_flag_permits_a_public_host_with_warning(self, capsys):
+        with patch.object(server.mcp, "run") as run:
+            server.main(["--transport", "http", "--host", "0.0.0.0", "--allow-insecure"])
+
+        run.assert_called_once_with(transport="streamable-http")
         assert "no authentication" in capsys.readouterr().err
+
+    def test_allow_insecure_can_come_from_the_environment(self, monkeypatch):
+        monkeypatch.setenv("MCP_ALLOW_INSECURE", "1")
+        with patch.object(server.mcp, "run") as run:
+            server.main(["--transport", "http", "--host", "0.0.0.0"])
+
+        run.assert_called_once_with(transport="streamable-http")
+
+    @pytest.mark.asyncio
+    async def test_overlong_queries_are_rejected_without_searching(self):
+        with _patch_search([]) as search:
+            assert "too long" in await server.lookup_symbol("x" * 101)
+            assert "too long" in await server.search_etfs("x" * 101)
+        search.assert_not_called()
 
     def test_bad_port_in_environment_is_a_clean_usage_error(self, monkeypatch, capsys):
         monkeypatch.setenv("MCP_PORT", "abc")
