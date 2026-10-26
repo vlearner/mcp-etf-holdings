@@ -1,0 +1,5 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "etf-holdings",
+  "description": "Find which ETFs hold any stock, compare funds, and pull holdings. Live Yahoo Finance data."
+}
