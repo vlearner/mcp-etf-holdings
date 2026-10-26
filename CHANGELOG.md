@@ -5,8 +5,9 @@ All notable changes to this project are recorded here.
 ## [Unreleased]
 
 ### Added
-- Antigravity setup instructions in the README, and an installable Antigravity plugin
-  (`antigravity/etf-holdings`: `plugin.json` + `mcp_config.json`). No code changes.
+- Antigravity setup instructions in the README, an installable Antigravity plugin
+  (`antigravity/etf-holdings`: `plugin.json` + `mcp_config.json`), and an Antigravity
+  tab on the GitHub Pages documentation site. No code changes.
 
 ## [0.5.0] — 2026-10-11
 
