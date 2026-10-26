@@ -117,6 +117,7 @@
 <div class="tabs" role="tablist" aria-label="Client">
   <button class="tab" role="tab" id="t-code" aria-controls="p-code" aria-selected="true">Claude Code</button>
   <button class="tab" role="tab" id="t-desktop" aria-controls="p-desktop" aria-selected="false">Claude Desktop</button>
+  <button class="tab" role="tab" id="t-antigravity" aria-controls="p-antigravity" aria-selected="false">Antigravity</button>
   <button class="tab" role="tab" id="t-vscode" aria-controls="p-vscode" aria-selected="false">VS Code</button>
   <button class="tab" role="tab" id="t-cursor" aria-controls="p-cursor" aria-selected="false">Cursor</button>
 </div>
@@ -142,6 +143,22 @@
   </div>
   <p class="note">Add to <code>claude_desktop_config.json</code> (macOS: <code>~/Library/Application Support/Claude/</code>, Windows: <code>%APPDATA%\Claude\</code>), then fully quit and reopen Claude Desktop.</p>
 </div>
+
+<div class="panel" role="tabpanel" id="p-antigravity" aria-labelledby="t-antigravity" hidden>
+  <div class="snippet">
+    <pre><code>{
+  "mcpServers": {
+    "etf-holdings": {
+      "command": "uvx",
+      "args": ["mcp-etf-holdings"]
+    }
+  }
+}</code></pre>
+    <button class="copy" type="button">Copy</button>
+  </div>
+  <p class="note">Add to <code>~/.gemini/config/mcp_config.json</code> (or in the IDE under <strong>MCP Servers &rarr; Manage MCP Servers &rarr; View raw config</strong>). Works in all workspaces.</p>
+</div>
+
 
 <div class="panel" role="tabpanel" id="p-vscode" aria-labelledby="t-vscode" hidden>
   <div class="snippet">
