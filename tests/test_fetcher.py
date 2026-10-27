@@ -598,6 +598,11 @@ class TestInputValidation:
             await search_etfs("test", limit=0)
 
     @pytest.mark.asyncio
+    async def test_search_etfs_overlong_query(self):
+        with pytest.raises(ValueError, match="at most 100"):
+            await search_etfs("x" * 101)
+
+    @pytest.mark.asyncio
     async def test_search_etfs_invalid_query(self):
         with pytest.raises(ValueError, match="non-empty string"):
             await search_etfs("", limit=10)

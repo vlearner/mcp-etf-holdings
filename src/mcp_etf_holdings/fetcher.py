@@ -290,6 +290,9 @@ def _etf_holdings_sync(ticker: str) -> list[dict[str, Any]]:
         return []
 
 
+MAX_QUERY_LENGTH = 100
+
+
 def _search_symbols_sync(
     query: str, limit: int, quote_types: tuple[str, ...] | None = None
 ) -> list[dict[str, Any]]:
@@ -300,6 +303,8 @@ def _search_symbols_sync(
     """
     if not isinstance(query, str) or not query.strip():
         raise ValueError("Query must be a non-empty string")
+    if len(query) > MAX_QUERY_LENGTH:
+        raise ValueError(f"Query must be at most {MAX_QUERY_LENGTH} characters")
     if not isinstance(limit, int) or limit < 1 or limit > 500:
         raise ValueError("Limit must be an integer between 1 and 500")
 

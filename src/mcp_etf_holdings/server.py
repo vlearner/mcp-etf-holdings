@@ -37,6 +37,7 @@ from .fetcher import (
     is_valid_ticker,
     resolve_stock_symbol,
     search_etfs as _search_etfs,
+    MAX_QUERY_LENGTH,
     search_symbols as _search_symbols,
 )
 from .formatting import (
@@ -466,6 +467,8 @@ async def search_etfs(
     """
     if not query.strip():
         return "Provide a non-empty search query, e.g. 'semiconductor' or 'emerging markets'."
+    if len(query) > MAX_QUERY_LENGTH:
+        return f"Search query is too long; keep it under {MAX_QUERY_LENGTH} characters."
     limit = max(1, min(limit, 25))
 
     results = await _search_etfs(query, limit=limit)
@@ -517,6 +520,8 @@ async def lookup_symbol(
     """
     if not query.strip():
         return "Provide a non-empty name to look up, e.g. 'Nvidia' or 'Berkshire Hathaway'."
+    if len(query) > MAX_QUERY_LENGTH:
+        return f"Name is too long; keep it under {MAX_QUERY_LENGTH} characters."
     limit = max(1, min(limit, 25))
 
     key = asset_type.strip().lower() if isinstance(asset_type, str) else "any"
@@ -570,6 +575,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="HTTP bind address (default 127.0.0.1; there is no authentication)",
     )
     parser.add_argument(
+        "--allow-insecure",
+        action="store_true",
+        default=os.environ.get("MCP_ALLOW_INSECURE", "").lower() in ("1", "true", "yes"),
+        help="permit HTTP on a non-loopback host despite there being no authentication",
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=os.environ.get("MCP_PORT", "8000"),  # argparse applies type=int
@@ -582,8 +593,15 @@ def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     if args.transport == "http":
         # The server has no authentication, so anything but loopback exposes
-        # Yahoo-backed tools to the network. Allow it, but say so loudly.
+        # Yahoo-backed tools to the network. Require an explicit opt-in.
         if args.host not in ("127.0.0.1", "localhost", "::1"):
+            if not args.allow_insecure:
+                sys.exit(
+                    f"Refusing to bind {args.host}: the HTTP transport has no "
+                    "authentication. Put an authenticating proxy in front and "
+                    "pass --allow-insecure (or set MCP_ALLOW_INSECURE=1). In "
+                    "Docker, publish the port to loopback only: -p 127.0.0.1:8000:8000."
+                )
             print(
                 f"WARNING: binding to {args.host} with no authentication; "
                 "put an authenticating proxy in front of this.",

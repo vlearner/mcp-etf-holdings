@@ -4,6 +4,14 @@ All notable changes to this project are recorded here.
 
 ## [Unreleased]
 
+### Changed
+- **Behavior change:** the HTTP transport now refuses to start on a non-loopback
+  `--host` unless `--allow-insecure` (or `MCP_ALLOW_INSECURE=1`) is given. It has no
+  authentication; this makes exposing it a deliberate choice. stdio and loopback HTTP
+  are unaffected. The sample Docker image needs `-e MCP_ALLOW_INSECURE=1` at run time (publish the port
+  to loopback).
+- Symbol/ETF search queries over 100 characters are rejected.
+
 ### Added
 - Antigravity setup instructions in the README, an installable Antigravity plugin
   (`antigravity/etf-holdings`: `plugin.json` + `mcp_config.json`), and an Antigravity
