@@ -10,8 +10,6 @@ All notable changes to this project are recorded here.
   if the version in `pyproject.toml` is not on PyPI it publishes to PyPI and the MCP
   Registry, then creates the `vX.Y.Z` tag and GitHub Release. A hand-made release still
   works. Merging the version-bump PR is the gate.
-
-### Changed
 - **Behavior change:** the HTTP transport now refuses to start on a non-loopback
   `--host` unless `--allow-insecure` (or `MCP_ALLOW_INSECURE=1`) is given. It has no
   authentication; this makes exposing it a deliberate choice. stdio and loopback HTTP
