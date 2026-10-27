@@ -5,6 +5,11 @@ All notable changes to this project are recorded here.
 ## [Unreleased]
 
 ### Changed
+- Releases no longer need a hand-published GitHub Release. `python-publish.yml` now also
+  runs every third day and on demand (Actions → Upload Python Package → Run workflow):
+  if the version in `pyproject.toml` is not on PyPI it publishes to PyPI and the MCP
+  Registry, then creates the `vX.Y.Z` tag and GitHub Release. A hand-made release still
+  works. Merging the version-bump PR is the gate.
 - **Behavior change:** the HTTP transport now refuses to start on a non-loopback
   `--host` unless `--allow-insecure` (or `MCP_ALLOW_INSECURE=1`) is given. It has no
   authentication; this makes exposing it a deliberate choice. stdio and loopback HTTP

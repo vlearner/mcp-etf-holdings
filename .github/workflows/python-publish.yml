@@ -1,5 +1,10 @@
-# Publishes mcp-etf-holdings to PyPI, then lists it on the MCP Registry, when a
-# GitHub Release is published. The release tag (vX.Y.Z) must match server.json.
+# Publishes mcp-etf-holdings to PyPI, then lists it on the MCP Registry, then tags
+# the GitHub Release. Three ways to start it:
+#   - schedule (every third day): publishes if the version in pyproject.toml is not
+#     on PyPI yet, otherwise does nothing. Merging a version-bump PR is the gate.
+#   - workflow_dispatch: the same check on demand, for a rush release.
+#   - a GitHub Release published by hand (vX.Y.Z): publishes that tag.
+# The version must match server.json in every case.
 #
 # Uses PyPI trusted publishing (OIDC) — no API token secret is stored in this repo.
 # This requires a matching publisher registered at pypi.org → Publishing:
@@ -11,13 +16,63 @@ name: Upload Python Package
 on:
   release:
     types: [published]
+  schedule:
+    - cron: "0 14 */3 * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: python-publish
+  cancel-in-progress: false
+
 jobs:
+  gate:
+    # Decides what, if anything, needs publishing. Scheduled and manual runs publish
+    # only a version PyPI does not have; a hand-made release always publishes its tag.
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      publish: ${{ steps.check.outputs.publish }}
+      tag_missing: ${{ steps.check.outputs.tag_missing }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work out the version and what is missing
+        id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ "$EVENT" = "release" ]; then
+            version="${RELEASE_TAG#v}"
+            publish=true
+            tag_missing=false
+          else
+            version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+            if curl -fsS "https://pypi.org/pypi/mcp-etf-holdings/${version}/json" >/dev/null; then
+              publish=false
+            else
+              publish=true
+            fi
+            if git ls-remote --exit-code --tags origin "refs/tags/v${version}" >/dev/null; then
+              tag_missing=false
+            else
+              tag_missing=true
+            fi
+          fi
+          echo "version=${version} publish=${publish} tag_missing=${tag_missing}"
+          {
+            echo "version=${version}"
+            echo "publish=${publish}"
+            echo "tag_missing=${tag_missing}"
+          } >> "$GITHUB_OUTPUT"
+
   release-build:
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.publish == 'true'
 
     steps:
       - uses: actions/checkout@v7
@@ -52,7 +107,9 @@ jobs:
   pypi-publish:
     runs-on: ubuntu-latest
     needs:
+      - gate
       - release-build
+    if: needs.gate.outputs.publish == 'true'
     permissions:
       # IMPORTANT: this permission is mandatory for trusted publishing
       id-token: write
@@ -80,6 +137,7 @@ jobs:
     # that is what makes the `io.github.vlearner/*` namespace publishable.
     runs-on: ubuntu-latest
     needs:
+      - gate
       - pypi-publish
     permissions:
       id-token: write
@@ -90,11 +148,11 @@ jobs:
 
       - name: Check server.json matches the release tag
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          VERSION: ${{ needs.gate.outputs.version }}
         run: |
           python3 - <<'PY'
           import json, os, sys
-          tag = os.environ["TAG"].removeprefix("v")
+          tag = os.environ["VERSION"]
           server = json.load(open("server.json"))
           versions = {server["version"], *(p["version"] for p in server["packages"])}
           if versions != {tag}:
@@ -104,9 +162,9 @@ jobs:
 
       - name: Wait for PyPI to serve the new version
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          VERSION: ${{ needs.gate.outputs.version }}
         run: |
-          version="${TAG#v}"
+          version="${VERSION}"
           for i in $(seq 1 24); do
             if curl -fsS "https://pypi.org/pypi/mcp-etf-holdings/${version}/json" >/dev/null; then
               echo "PyPI has ${version}"; exit 0
@@ -130,3 +188,32 @@ jobs:
 
       - name: Publish server.json
         run: ./mcp-publisher publish
+
+  github-release:
+    # Tags the version once it is live. Creating a release with GITHUB_TOKEN does not
+    # fire the `release` trigger, so this cannot start a second publish. Skipped for a
+    # hand-made release (the tag exists). It needs the registry job to have succeeded; a skip
+    # only counts when the gate found nothing to publish (PyPI already had the version),
+    # because `needs` shows direct dependencies only and upstream failures surface as a skip.
+    runs-on: ubuntu-latest
+    needs:
+      - gate
+      - registry-publish
+    if: >-
+      always()
+      && needs.gate.result == 'success'
+      && needs.gate.outputs.tag_missing == 'true'
+      && (
+        needs.registry-publish.result == 'success'
+        || (needs.gate.outputs.publish == 'false' && needs.registry-publish.result == 'skipped')
+      )
+    permissions:
+      contents: write
+    steps:
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "v${VERSION}" --generate-notes
