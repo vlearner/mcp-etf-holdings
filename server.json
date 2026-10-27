@@ -6,12 +6,12 @@
     "url": "https://github.com/vlearner/mcp-etf-holdings",
     "source": "github"
   },
-  "version": "0.5.0",
+  "version": "0.6.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "mcp-etf-holdings",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

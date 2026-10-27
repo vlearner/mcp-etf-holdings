@@ -4,6 +4,8 @@ All notable changes to this project are recorded here.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-27
+
 ### Changed
 - Releases no longer need a hand-published GitHub Release. `python-publish.yml` now also
   runs every third day and on demand (Actions → Upload Python Package → Run workflow):
