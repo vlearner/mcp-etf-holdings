@@ -6,7 +6,7 @@ All notable changes to this project are recorded here.
 
 ### Changed
 - Releases no longer need a hand-published GitHub Release. `python-publish.yml` now also
-  runs every other day and on demand (Actions → Upload Python Package → Run workflow):
+  runs every third day and on demand (Actions → Upload Python Package → Run workflow):
   if the version in `pyproject.toml` is not on PyPI it publishes to PyPI and the MCP
   Registry, then creates the `vX.Y.Z` tag and GitHub Release. A hand-made release still
   works. Merging the version-bump PR is the gate.

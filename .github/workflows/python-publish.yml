@@ -1,6 +1,6 @@
 # Publishes mcp-etf-holdings to PyPI, then lists it on the MCP Registry, then tags
 # the GitHub Release. Three ways to start it:
-#   - schedule (every other day): publishes if the version in pyproject.toml is not
+#   - schedule (every third day): publishes if the version in pyproject.toml is not
 #     on PyPI yet, otherwise does nothing. Merging a version-bump PR is the gate.
 #   - workflow_dispatch: the same check on demand, for a rush release.
 #   - a GitHub Release published by hand (vX.Y.Z): publishes that tag.
@@ -17,7 +17,7 @@ on:
   release:
     types: [published]
   schedule:
-    - cron: "0 14 */2 * *"
+    - cron: "0 14 */3 * *"
   workflow_dispatch:
 
 permissions:
