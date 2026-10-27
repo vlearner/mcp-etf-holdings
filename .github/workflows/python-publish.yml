@@ -192,7 +192,9 @@ jobs:
   github-release:
     # Tags the version once it is live. Creating a release with GITHUB_TOKEN does not
     # fire the `release` trigger, so this cannot start a second publish. Skipped for a
-    # hand-made release (the tag exists) and when a publish job failed.
+    # hand-made release (the tag exists). It needs the registry job to have succeeded; a skip
+    # only counts when the gate found nothing to publish (PyPI already had the version),
+    # because `needs` shows direct dependencies only and upstream failures surface as a skip.
     runs-on: ubuntu-latest
     needs:
       - gate
@@ -201,8 +203,10 @@ jobs:
       always()
       && needs.gate.result == 'success'
       && needs.gate.outputs.tag_missing == 'true'
-      && !contains(needs.*.result, 'failure')
-      && !contains(needs.*.result, 'cancelled')
+      && (
+        needs.registry-publish.result == 'success'
+        || (needs.gate.outputs.publish == 'false' && needs.registry-publish.result == 'skipped')
+      )
     permissions:
       contents: write
     steps:
